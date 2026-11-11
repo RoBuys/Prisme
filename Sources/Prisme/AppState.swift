@@ -340,7 +340,11 @@ final class AppState {
         var origin = CGPoint(x: 40 + CGFloat(n % 8) * 30, y: 40 + CGFloat(n % 8) * 30)
         origin.x = min(origin.x, PageSize.width - size.width)
         origin.y = min(origin.y, PageSize.height - size.height)
-        let v = Visual(type: type, frame: CGRect(origin: origin, size: size))
+        var v = Visual(type: type, frame: CGRect(origin: origin, size: size))
+        if type.isElement {
+            v.content = ElementContent.defaults(for: type)
+            v.showTitle = false
+        }
         mutatePage { $0.visuals.append(v) }
         selectedVisualID = v.id
         return v.id
@@ -365,6 +369,62 @@ final class AppState {
             body(&f)
             v.format = f
         }
+    }
+
+    func mutateContent(_ id: UUID, _ body: (inout ElementContent) -> Void) {
+        mutateVisual(id) { v in
+            var c = v.element
+            body(&c)
+            v.content = c
+        }
+    }
+
+    /// Runs a button's action (⌘-click on the canvas).
+    func perform(_ action: ButtonAction) {
+        switch action {
+        case .none: break
+        case .page(let id): if pages.contains(where: { $0.id == id }) { selectPage(id) }
+        case .bookmark(let id): applyBookmark(id)
+        case .back: drillthroughBack()
+        case .url(let s): if let u = URL(string: s), ["http", "https", "mailto"].contains(u.scheme ?? "") { NSWorkspace.shared.open(u) }
+        }
+    }
+
+    /// Text with "{Measure}" placeholders replaced by the measures' values in the visual's filter context.
+    func dynamicText(_ text: String, for v: Visual) -> String {
+        guard text.contains("{"), let re = try? NSRegularExpression(pattern: #"\{\[?([^\]\}]+)\]?\}"#) else { return text }
+        var out = text
+        for m in re.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+            guard let r = Range(m.range, in: out), let nr = Range(m.range(at: 1), in: text) else { continue }
+            let name = String(text[nr]).trimmingCharacters(in: .whitespaces)
+            guard let me = measures.first(where: { $0.name.caseInsensitiveEquals(name) }) else { continue }
+            let probe = Visual(type: .card, frame: .zero, values: [ValueField(field: me.field, aggregation: .sum, isMeasure: true)])
+            let value = Engine.scalars(probe, model, filters(for: v)).first ?? nil
+            out.replaceSubrange(r, with: value.map { Fmt.measure($0, me.format, compact: false) } ?? L("(Vide)"))
+        }
+        return out
+    }
+
+    /// Loads an image file, downscaled to at most 1600 px.
+    func loadImage(into id: UUID) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        guard panel.runModal() == .OK, let url = panel.url, let data = Self.imageData(contentsOf: url) else { return }
+        mutateContent(id) { $0.imageData = data }
+    }
+
+    static func imageData(contentsOf url: URL, maxSide: CGFloat = 1600) -> Data? {
+        guard let img = NSImage(contentsOf: url), let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let scale = min(1, maxSide / CGFloat(max(cg.width, cg.height)))
+        let w = Int(CGFloat(cg.width) * scale), h = Int(CGFloat(cg.height) * scale)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let out = ctx.makeImage() else { return nil }
+        let rep = NSBitmapImageRep(cgImage: out)
+        let hasAlpha = cg.alphaInfo != .none && cg.alphaInfo != .noneSkipLast && cg.alphaInfo != .noneSkipFirst
+        return hasAlpha ? rep.representation(using: .png, properties: [:]) : rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
     }
 
     func deleteVisual(_ id: UUID? = nil) {

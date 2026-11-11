@@ -97,13 +97,14 @@ struct VisualContainer: View {
         let w = max(120, f.width + resize.width)
         let h = max(70, f.height + resize.height)
 
+        let element = visual.type.isElement
         VisualContentView(visual: visual)
-            .padding(10)
+            .padding(element ? 0 : 10)
             .frame(width: w, height: h)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Color.white))
+            .background(RoundedRectangle(cornerRadius: 4).fill(element ? Color.clear : Color.white))
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(selected ? Theme.accent : Color.black.opacity(hover ? 0.18 : 0.06),
+                    .strokeBorder(selected ? Theme.accent : Color.black.opacity(hover ? 0.18 : (element ? 0 : 0.06)),
                                   lineWidth: selected ? 1.5 : 1)
             )
             .overlay(alignment: .topTrailing) {
@@ -115,6 +116,10 @@ struct VisualContainer: View {
             .contentShape(Rectangle())
             .offset(x: f.minX + drag.width, y: f.minY + drag.height)
             .simultaneousGesture(TapGesture().onEnded {
+                if visual.type == .button, NSEvent.modifierFlags.contains(.command) {
+                    state.perform(visual.element.action)
+                    return
+                }
                 if state.selectedVisualID != visual.id { state.selectedVisualID = visual.id }
             })
             .gesture(

@@ -419,3 +419,95 @@ struct FunnelView: View {
         }
     }
 }
+
+// MARK: - Page elements
+
+struct ElementShape: Shape {
+    let kind: ShapeKind
+    let radius: CGFloat
+
+    func path(in r: CGRect) -> Path {
+        switch kind {
+        case .rectangle: return Path(r)
+        case .rounded: return Path(roundedRect: r, cornerRadius: radius)
+        case .ellipse: return Path(ellipseIn: r)
+        case .line:
+            var p = Path()
+            p.move(to: CGPoint(x: r.minX, y: r.midY))
+            p.addLine(to: CGPoint(x: r.maxX, y: r.midY))
+            return p
+        case .arrow:
+            var p = Path()
+            let head = min(r.height, r.width * 0.4)
+            p.move(to: CGPoint(x: r.minX, y: r.midY - r.height * 0.18))
+            p.addLine(to: CGPoint(x: r.maxX - head, y: r.midY - r.height * 0.18))
+            p.addLine(to: CGPoint(x: r.maxX - head, y: r.minY))
+            p.addLine(to: CGPoint(x: r.maxX, y: r.midY))
+            p.addLine(to: CGPoint(x: r.maxX - head, y: r.maxY))
+            p.addLine(to: CGPoint(x: r.maxX - head, y: r.midY + r.height * 0.18))
+            p.addLine(to: CGPoint(x: r.minX, y: r.midY + r.height * 0.18))
+            p.closeSubpath()
+            return p
+        }
+    }
+}
+
+struct ElementView: View {
+    let visual: Visual
+    @Environment(AppState.self) private var state
+
+    private var c: ElementContent { visual.element }
+
+    private var alignment: (TextAlignment, Alignment) {
+        switch c.alignment {
+        case "center": (.center, .center)
+        case "trailing": (.trailing, .trailing)
+        default: (.leading, .leading)
+        }
+    }
+
+    private var label: some View {
+        Text(state.dynamicText(c.text, for: visual))
+            .font(.system(size: c.fontSize, weight: c.bold ? .bold : .regular))
+            .italic(c.italic)
+            .foregroundStyle(Color(hexString: c.textColor) ?? .primary)
+            .multilineTextAlignment(alignment.0)
+    }
+
+    var body: some View {
+        switch visual.type {
+        case .text:
+            label
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Alignment(horizontal: alignment.1.horizontal, vertical: .top))
+                .padding(8)
+                .background(c.fill.flatMap { Color(hexString: $0) } ?? .clear)
+        case .image:
+            if let data = c.imageData, let img = NSImage(data: data) {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: c.imageFill ? .fill : .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+            } else {
+                PlaceholderView(message: L("Choisissez une image dans le volet Visualisations"), symbol: "photo")
+            }
+        case .shape:
+            let shape = ElementShape(kind: c.shape, radius: c.cornerRadius)
+            ZStack {
+                if c.shape != .line { shape.fill(c.fill.flatMap { Color(hexString: $0) } ?? .clear) }
+                if let s = c.stroke { shape.stroke(Color(hexString: s) ?? .black, lineWidth: c.strokeWidth) }
+            }
+            .padding(c.shape == .line ? 0 : c.strokeWidth / 2)
+        case .button:
+            label
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment.1)
+                .background(RoundedRectangle(cornerRadius: c.cornerRadius).fill(c.fill.flatMap { Color(hexString: $0) } ?? Theme.accent))
+                .overlay(RoundedRectangle(cornerRadius: c.cornerRadius).strokeBorder(c.stroke.flatMap { Color(hexString: $0) } ?? .clear,
+                                                                                      lineWidth: c.strokeWidth))
+                .help(c.action == .none ? L("Bouton sans action") : L("⌘-clic pour exécuter l'action du bouton"))
+        default:
+            EmptyView()
+        }
+    }
+}

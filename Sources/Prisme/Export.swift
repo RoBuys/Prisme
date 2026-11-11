@@ -39,10 +39,10 @@ struct PageRenderView: View {
             Color.white
             ForEach(page.visuals) { v in
                 VisualContentView(visual: v)
-                    .padding(10)
+                    .padding(v.type.isElement ? 0 : 10)
                     .frame(width: v.frame.width, height: v.frame.height)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.white))
-                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.black.opacity(0.06)))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(v.type.isElement ? Color.clear : Color.white))
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.black.opacity(v.type.isElement ? 0 : 0.06)))
                     .offset(x: v.frame.minX, y: v.frame.minY)
             }
         }

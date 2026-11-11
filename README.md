@@ -72,6 +72,8 @@ import data, then build interactive reports with drag and drop. The interface is
   PostgreSQL, MySQL). **.pbix** files only expose their layout: tables are recreated empty from the visuals' fields
   (use **Change Source…** on a table) and measures as placeholders. An import summary lists what couldn't be
   converted (unsupported visuals or DAX, calculated tables, bidirectional relationships).
+- **Page elements**: text boxes (with `{Measure}` placeholders showing live values), images, shapes and buttons
+  (⌘-click to go to a page, apply a bookmark, go back after a drillthrough or open a link).
 - **Saving** reports (data included) as `.prisme` files.
 - **Power BI reports shared with you** (**Power BI** view, cloud icon): sign in with your Microsoft work account,
   browse My workspace and shared reports, workspaces and apps, and display reports interactively (embedded with the

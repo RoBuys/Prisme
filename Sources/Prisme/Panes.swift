@@ -45,7 +45,9 @@ struct VisualizationsPane: View {
                 VStack(alignment: .leading, spacing: 14) {
                     typeGrid
                     Divider()
-                    if let v = state.selectedVisual {
+                    if let v = state.selectedVisual, v.type.isElement {
+                        ElementFormatSection(visual: v)
+                    } else if let v = state.selectedVisual {
                         wells(v)
                         Divider()
                         formatSection(v)
@@ -87,6 +89,8 @@ struct VisualizationsPane: View {
     @ViewBuilder
     private func wells(_ v: Visual) -> some View {
         switch v.type {
+        case .text, .image, .shape, .button:
+            EmptyView()
         case .waterfall, .funnel:
             axisWell(L("Catégorie"), v, multi: true)
             valuesWell(L("Valeurs"), v, multi: false)
@@ -740,5 +744,137 @@ struct FilterCard: View {
         if filter.selected.isEmpty { return L("est (Tout)") }
         let s = filter.selected.sorted()
         return L("est ") + s.prefix(2).joined(separator: ", ") + (s.count > 2 ? " +\(s.count - 2)" : "")
+    }
+}
+
+// MARK: - Page element formatting
+
+struct ElementFormatSection: View {
+    let visual: Visual
+    @Environment(AppState.self) private var state
+
+    private var c: ElementContent { visual.element }
+
+    private func set(_ body: @escaping (inout ElementContent) -> Void) { state.mutateContent(visual.id, body) }
+
+    private func color(_ title: String, _ get: @escaping (ElementContent) -> String?, _ put: @escaping (inout ElementContent, String?) -> Void,
+                       optional: Bool = true) -> some View {
+        HStack {
+            ColorPicker(title, selection: Binding(get: { get(c).flatMap(Color.init(hexString:)) ?? .clear },
+                                                  set: { col in set { put(&$0, col.hexString) } }), supportsOpacity: false)
+            if optional && get(c) != nil {
+                Button { set { put(&$0, nil) } } label: { Image(systemName: "xmark.circle") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help(L("Aucune"))
+            }
+        }
+        .font(.system(size: 11))
+    }
+
+    private var textOptions: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextEditor(text: Binding(get: { c.text }, set: { t in set { $0.text = t } }))
+                .font(.system(size: 12))
+                .frame(height: visual.type == .button ? 40 : 90)
+                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.15)))
+            Text(L("Insérez {Nom de la mesure} pour afficher sa valeur."))
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+            Stepper(value: Binding(get: { c.fontSize }, set: { v in set { $0.fontSize = v } }), in: 6...96, step: 1) {
+                Text(L("Taille : %@ pt", Int(c.fontSize))).font(.system(size: 11))
+            }
+            .controlSize(.small)
+            HStack {
+                Toggle(L("Gras"), isOn: Binding(get: { c.bold }, set: { v in set { $0.bold = v } }))
+                Toggle(L("Italique"), isOn: Binding(get: { c.italic }, set: { v in set { $0.italic = v } }))
+            }
+            .toggleStyle(.checkbox).font(.system(size: 11))
+            Picker("", selection: Binding(get: { c.alignment }, set: { v in set { $0.alignment = v } })) {
+                Image(systemName: "text.alignleft").tag("leading")
+                Image(systemName: "text.aligncenter").tag("center")
+                Image(systemName: "text.alignright").tag("trailing")
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            color(L("Couleur du texte"), { $0.textColor }, { $0.textColor = $1 ?? "252A33" }, optional: false)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(visual.type.label).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            switch visual.type {
+            case .text:
+                textOptions
+                color(L("Arrière-plan"), { $0.fill }, { $0.fill = $1 })
+            case .image:
+                HStack {
+                    Button(c.imageData == nil ? L("Choisir une image…") : L("Remplacer l'image…")) { state.loadImage(into: visual.id) }
+                    if c.imageData != nil { Button(L("Retirer")) { set { $0.imageData = nil } } }
+                }
+                .controlSize(.small)
+                Picker(L("Ajustement"), selection: Binding(get: { c.imageFill }, set: { v in set { $0.imageFill = v } })) {
+                    Text(L("Ajuster")).tag(false)
+                    Text(L("Remplir")).tag(true)
+                }
+                .font(.system(size: 11))
+            case .shape:
+                Picker(L("Forme"), selection: Binding(get: { c.shape }, set: { v in set { $0.shape = v } })) {
+                    ForEach(ShapeKind.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .font(.system(size: 11))
+                color(L("Remplissage"), { $0.fill }, { $0.fill = $1 })
+                color(L("Contour"), { $0.stroke }, { $0.stroke = $1 })
+                Stepper(value: Binding(get: { c.strokeWidth }, set: { v in set { $0.strokeWidth = v } }), in: 0...20) {
+                    Text(L("Épaisseur : %@", Int(c.strokeWidth))).font(.system(size: 11))
+                }
+                .controlSize(.small)
+                if c.shape == .rounded {
+                    Stepper(value: Binding(get: { c.cornerRadius }, set: { v in set { $0.cornerRadius = v } }), in: 0...100, step: 2) {
+                        Text(L("Arrondi : %@", Int(c.cornerRadius))).font(.system(size: 11))
+                    }
+                    .controlSize(.small)
+                }
+            case .button:
+                textOptions
+                color(L("Remplissage"), { $0.fill }, { $0.fill = $1 })
+                color(L("Contour"), { $0.stroke }, { $0.stroke = $1 })
+                actionPicker
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private var actionPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L("Action")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            Menu(actionLabel) {
+                Button(L("Aucune")) { set { $0.action = .none } }
+                Menu(L("Aller à la page")) {
+                    ForEach(state.pages) { p in Button(p.name) { set { $0.action = .page(p.id) } } }
+                }
+                Menu(L("Appliquer un signet")) {
+                    ForEach(state.bookmarks) { b in Button(b.name) { set { $0.action = .bookmark(b.id) } } }
+                }
+                .disabled(state.bookmarks.isEmpty)
+                Button(L("Retour (après une extraction)")) { set { $0.action = .back } }
+                Button(L("Ouvrir un lien…")) { set { $0.action = .url("https://") } }
+            }
+            .font(.system(size: 11))
+            if case .url(let u) = c.action {
+                TextField("https://", text: Binding(get: { u }, set: { v in set { $0.action = .url(v) } }))
+                    .textFieldStyle(.roundedBorder).font(.system(size: 11))
+            }
+            Text(L("Sur la page, ⌘-clic sur le bouton exécute l'action."))
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+        }
+    }
+
+    private var actionLabel: String {
+        switch c.action {
+        case .none: L("Aucune")
+        case .page(let id): L("Page : %@", state.pages.first { $0.id == id }?.name ?? "?")
+        case .bookmark(let id): L("Signet : %@", state.bookmarks.first { $0.id == id }?.name ?? "?")
+        case .back: L("Retour")
+        case .url: L("Lien web")
+        }
     }
 }

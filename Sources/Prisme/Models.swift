@@ -216,6 +216,7 @@ struct ValueField: Hashable, Codable, Identifiable {
 enum VisualType: String, Codable, CaseIterable, Identifiable {
     case column, bar, line, area, pie, donut, card, table, slicer, matrix, scatter, combo, gauge, kpi, map
     case stackedColumn, stackedBar, percentColumn, waterfall, funnel
+    case text, image, shape, button
     var id: String { rawValue }
 
     var label: String {
@@ -240,6 +241,10 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
         case .percentColumn: L("Histogramme empilé 100 %")
         case .waterfall: L("Cascade")
         case .funnel: L("Entonnoir")
+        case .text: L("Zone de texte")
+        case .image: L("Image")
+        case .shape: L("Forme")
+        case .button: L("Bouton")
         }
     }
 
@@ -265,9 +270,15 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
         case .percentColumn: "percent"
         case .waterfall: "chart.bar.xaxis.ascending"
         case .funnel: "line.3.horizontal.decrease"
+        case .text: "textformat"
+        case .image: "photo"
+        case .shape: "square.on.circle"
+        case .button: "hand.tap"
         }
     }
 
+    /// Page elements without data fields (text, image, shape, button).
+    var isElement: Bool { [.text, .image, .shape, .button].contains(self) }
     var isCartesian: Bool { [.column, .bar, .line, .area, .stackedColumn, .stackedBar, .percentColumn].contains(self) }
     var isHorizontal: Bool { self == .bar || self == .stackedBar }
     var isStacked: Bool { [.stackedColumn, .stackedBar, .percentColumn].contains(self) }
@@ -289,6 +300,10 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
         case .gauge: CGSize(width: 300, height: 210)
         case .kpi: CGSize(width: 300, height: 180)
         case .map: CGSize(width: 480, height: 340)
+        case .text: CGSize(width: 320, height: 80)
+        case .image: CGSize(width: 240, height: 180)
+        case .shape: CGSize(width: 200, height: 120)
+        case .button: CGSize(width: 160, height: 44)
         default: CGSize(width: 460, height: 290)
         }
     }
@@ -305,6 +320,83 @@ enum SortMode: String, Codable, CaseIterable {
         case .categoryAsc: L("Catégorie (A → Z)")
         case .categoryDesc: L("Catégorie (Z → A)")
         }
+    }
+}
+
+enum ShapeKind: String, Codable, CaseIterable {
+    case rectangle, rounded, ellipse, line, arrow
+
+    var label: String {
+        switch self {
+        case .rectangle: L("Rectangle")
+        case .rounded: L("Rectangle arrondi")
+        case .ellipse: L("Ellipse")
+        case .line: L("Ligne")
+        case .arrow: L("Flèche")
+        }
+    }
+}
+
+enum ButtonAction: Hashable, Codable {
+    case none
+    case page(UUID)
+    case bookmark(UUID)
+    case back
+    case url(String)
+}
+
+/// Settings of page elements: text boxes, images, shapes and buttons.
+struct ElementContent: Hashable, Codable {
+    /// Text, or button label. "{Measure}" placeholders show a measure's value.
+    var text = ""
+    var fontSize: Double = 14
+    var bold = false
+    var italic = false
+    var alignment = "leading"
+    var textColor = "252A33"
+    var fill: String?
+    var stroke: String?
+    var strokeWidth: Double = 1
+    var cornerRadius: Double = 6
+    var shape: ShapeKind = .rectangle
+    var imageData: Data?
+    var imageFill = false
+    var action: ButtonAction = .none
+
+    static func defaults(for type: VisualType) -> ElementContent {
+        var c = ElementContent()
+        switch type {
+        case .text: c.text = L("Texte")
+        case .shape: c.fill = "DCE6F7"; c.stroke = "2E6FD8"
+        case .button:
+            c.text = L("Bouton"); c.fill = "2E6FD8"; c.textColor = "FFFFFF"; c.alignment = "center"; c.bold = true; c.cornerRadius = 8
+        default: break
+        }
+        return c
+    }
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case text, fontSize, bold, italic, alignment, textColor, fill, stroke, strokeWidth, cornerRadius, shape, imageData, imageFill, action
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? 14
+        bold = try c.decodeIfPresent(Bool.self, forKey: .bold) ?? false
+        italic = try c.decodeIfPresent(Bool.self, forKey: .italic) ?? false
+        alignment = try c.decodeIfPresent(String.self, forKey: .alignment) ?? "leading"
+        textColor = try c.decodeIfPresent(String.self, forKey: .textColor) ?? "252A33"
+        fill = try c.decodeIfPresent(String.self, forKey: .fill)
+        stroke = try c.decodeIfPresent(String.self, forKey: .stroke)
+        strokeWidth = try c.decodeIfPresent(Double.self, forKey: .strokeWidth) ?? 1
+        cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? 6
+        shape = try c.decodeIfPresent(ShapeKind.self, forKey: .shape) ?? .rectangle
+        imageData = try c.decodeIfPresent(Data.self, forKey: .imageData)
+        imageFill = try c.decodeIfPresent(Bool.self, forKey: .imageFill) ?? false
+        action = try c.decodeIfPresent(ButtonAction.self, forKey: .action) ?? .none
     }
 }
 
@@ -392,6 +484,10 @@ struct Visual: Identifiable, Hashable, Codable {
     var drillMode: Bool?
     /// Slicer: share its selection with synced slicers on the same field (all pages).
     var syncSlicer: Bool?
+    /// Text, image, shape and button settings.
+    var content: ElementContent?
+
+    var element: ElementContent { content ?? ElementContent.defaults(for: type) }
 
     var fmt: VisualFormat { format ?? VisualFormat() }
 

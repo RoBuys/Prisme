@@ -6,6 +6,14 @@ struct VisualContentView: View {
     @Environment(AppState.self) private var state
 
     var body: some View {
+        if visual.type.isElement {
+            ElementView(visual: visual)
+        } else {
+            chartBody
+        }
+    }
+
+    private var chartBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             if visual.showTitle && visual.type != .card {
                 HStack(spacing: 4) {
@@ -70,6 +78,8 @@ struct VisualContentView: View {
             WaterfallView(data: Engine.chartData(visual, state.model, filters), format: visual.fmt, selected: selected, onSelect: onSelect)
         case .funnel:
             FunnelView(data: Engine.chartData(visual, state.model, filters), format: visual.fmt, selected: selected, onSelect: onSelect)
+        case .text, .image, .shape, .button:
+            ElementView(visual: visual)
         case .map:
             MapVisualView(data: Engine.chartData(visual, state.model, filters), format: visual.fmt,
                           selected: selected, onSelect: onSelect)
