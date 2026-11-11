@@ -104,6 +104,20 @@ struct FilterSpec {
     var allowed: Set<String>
     /// True for the implicit filters of a chart category / table row (removed by ALLSELECTED).
     var isGroup = false
+    /// Keep values (numbers, or dates as timestamps) within this range — used by time intelligence.
+    var range: ClosedRange<Double>? = nil
+    /// Keep only these rows of `field.table` — used by FILTER, comparisons and context transition.
+    var rowSet: Set<Int>? = nil
+
+    init(field: FieldRef, allowed: Set<String>, isGroup: Bool = false, range: ClosedRange<Double>? = nil, rowSet: Set<Int>? = nil) {
+        self.field = field
+        self.allowed = allowed
+        self.isGroup = isGroup
+        self.range = range
+        self.rowSet = rowSet
+    }
+
+    var isActive: Bool { !allowed.isEmpty || range != nil || rowSet != nil }
 }
 
 struct ChartPoint: Identifiable {
@@ -309,15 +323,35 @@ struct QueryContext {
         return { r in map[r].map { rows[$0][i] } ?? .empty }
     }
 
+    /// Row of `table` related to a base row.
+    func relatedRow(_ table: String, _ b: Int) -> Int? {
+        if table == base.name { return b }
+        return maps[table]?[b]
+    }
+
     /// Indices of base rows that pass every applicable filter. Filters on unreachable tables are ignored.
     func rowIndices(_ filters: [FilterSpec]) -> [Int] {
-        let active = filters.compactMap { f -> ((Int) -> CellValue, DateLevel?, Set<String>)? in
-            guard !f.allowed.isEmpty, let a = accessor(f.field) else { return nil }
-            return (a, f.field.dateLevel, f.allowed)
+        var tests: [(Int) -> Bool] = []
+        for f in filters where f.isActive && reaches(f.field.table) {
+            if let set = f.rowSet {
+                let t = f.field.table
+                tests.append { b in relatedRow(t, b).map(set.contains) ?? false }
+            } else if let range = f.range {
+                guard let get = accessor(f.field) else { continue }
+                tests.append { b in
+                    let v = get(b)
+                    guard let x = v.number ?? v.date?.timeIntervalSince1970 else { return false }
+                    return range.contains(x)
+                }
+            } else {
+                guard let get = accessor(f.field) else { continue }
+                let level = f.field.dateLevel, allowed = f.allowed
+                tests.append { b in allowed.contains(GroupKey.of(get(b), level).label) }
+            }
         }
         let all = Array(base.rows.indices)
-        if active.isEmpty { return all }
-        return all.filter { r in active.allSatisfy { $0.2.contains(GroupKey.of($0.0(r), $0.1).label) } }
+        if tests.isEmpty { return all }
+        return all.filter { b in tests.allSatisfy { $0(b) } }
     }
 }
 

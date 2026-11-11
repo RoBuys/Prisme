@@ -136,6 +136,8 @@ struct RibbonView: View {
             RibbonGroup(L("Calculs")) {
                 RibbonButton(L("Nouvelle mesure"), "function") { state.newMeasure() }
                     .disabled(state.tables.isEmpty)
+                RibbonButton(L("Nouvelle colonne"), "tablecells.badge.ellipsis") { state.newColumn() }
+                    .disabled(state.tables.isEmpty)
             }
             RibbonDivider()
             RibbonGroup(L("Insérer")) {

@@ -39,6 +39,8 @@ enum CellValue: Hashable {
 struct DataColumn: Hashable, Codable, Identifiable {
     var name: String
     var type: ColumnType
+    /// Calculated column: DAX-like expression evaluated for each row.
+    var expression: String? = nil
     var id: String { name }
 }
 

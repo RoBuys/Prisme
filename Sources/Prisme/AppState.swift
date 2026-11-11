@@ -11,6 +11,9 @@ struct MeasureDraft: Identifiable {
     var table: String
     var expression: String
     var format: MeasureFormat
+    /// A calculated column rather than a measure; `originalName` is the column being edited.
+    var isColumn = false
+    var originalName: String?
 }
 
 struct CrossFilter: Equatable {
@@ -524,10 +527,13 @@ final class AppState {
             do {
                 for i in tables.indices {
                     if let u = updates[tables[i].name] {
-                        tables[i].columns = u.columns
-                        tables[i].rows = u.rows
+                        // Keep calculated columns: re-append their definitions, then recompute them.
+                        let calculated = tables[i].columns.filter { $0.expression != nil }
+                        tables[i].columns = u.columns + calculated
+                        tables[i].rows = u.rows.map { $0 + Array(repeating: CellValue.empty, count: calculated.count) }
                     }
                 }
+                recomputeCalculatedColumns()
                 if !updates.isEmpty { didChange() }
                 isImporting = false
                 if !errors.isEmpty { alertMessage = errors.joined(separator: "\n") }
@@ -717,8 +723,120 @@ final class AppState {
         return true
     }
 
+    // MARK: Calculated columns
+
+    func newColumn(in table: String? = nil) {
+        guard let home = table ?? dataTableName ?? tables.first?.name else { return }
+        var n = L("Colonne"), k = 2
+        while !isMeasureNameFree(n, excluding: nil, table: home) { n = L("Colonne %@", k); k += 1 }
+        measureDraft = MeasureDraft(id: nil, name: n, table: home, expression: "", format: .auto, isColumn: true)
+    }
+
+    func editColumn(table: String, column: DataColumn) {
+        measureDraft = MeasureDraft(id: nil, name: column.name, table: table, expression: column.expression ?? "",
+                                    format: .auto, isColumn: true, originalName: column.name)
+    }
+
+    /// Evaluates a column expression for every row of the table.
+    func computeColumn(table: String, expression: String, model m: DataModel? = nil) throws -> (ColumnType, [CellValue]) {
+        let m = m ?? model
+        guard let t = m.table(table) else { throw MeasureError(message: L("Table introuvable : %@", table)) }
+        let e: Expr
+        switch MeasureCompiler.parse(expression) {
+        case .success(let x): e = x
+        case .failure(let err): throw err
+        }
+        let ev = MeasureEvaluator(ctx: QueryContext(base: t, model: m), model: m)
+        let values = try t.rows.indices.map { try ev.evaluateRow(e, row: $0) }
+        let present = values.filter { !$0.isBlank }
+        if !present.isEmpty && present.allSatisfy({ if case .date = $0 { return true }; return false }) {
+            return (.date, values.map(\.cell))
+        }
+        if present.allSatisfy({ if case .number = $0 { return true }; return false }) {
+            return (.number, values.map(\.cell))
+        }
+        return (.text, values.map { v in v.isBlank ? .empty : .text(v.string) })
+    }
+
+    /// Recomputes calculated columns (all tables, in column order). Errors leave blank values.
+    func recomputeCalculatedColumns() {
+        for ti in tables.indices {
+            for ci in tables[ti].columns.indices {
+                guard let expr = tables[ti].columns[ci].expression else { continue }
+                let result = try? computeColumn(table: tables[ti].name, expression: expr)
+                for r in tables[ti].rows.indices { tables[ti].rows[r][ci] = result?.1[r] ?? .empty }
+                if let type = result?.0 { tables[ti].columns[ci].type = type }
+            }
+        }
+    }
+
+    func saveColumn(_ d: MeasureDraft) -> String? {
+        let name = d.name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return L("Donnez un nom à la colonne.") }
+        guard !name.contains("[") && !name.contains("]") else { return L("Le nom ne peut pas contenir de crochets.") }
+        guard let ti = tables.firstIndex(where: { $0.name == d.table }) else { return L("Table introuvable : %@", d.table) }
+        let clash = tables[ti].columns.contains { $0.name.caseInsensitiveEquals(name) && $0.name != d.originalName }
+            || measures.contains { $0.name.caseInsensitiveEquals(name) }
+        guard !clash else { return L("Le nom « %@ » est déjà utilisé par une autre mesure ou une colonne.", name) }
+        if let err = MeasureCompiler.validate(d.expression, home: d.table, name: "", model) { return err }
+        let result: (ColumnType, [CellValue])
+        do { result = try computeColumn(table: d.table, expression: d.expression) }
+        catch { return error.localizedDescription }
+
+        if let old = d.originalName, let ci = tables[ti].columnIndex(old) {
+            tables[ti].columns[ci] = DataColumn(name: name, type: result.0, expression: d.expression)
+            for r in tables[ti].rows.indices { tables[ti].rows[r][ci] = result.1[r] }
+            if old != name { renameColumnReferences(table: d.table, from: old, to: name) }
+        } else {
+            tables[ti].columns.append(DataColumn(name: name, type: result.0, expression: d.expression))
+            for r in tables[ti].rows.indices { tables[ti].rows[r].append(result.1[r]) }
+        }
+        recomputeCalculatedColumns()
+        didChange()
+        return nil
+    }
+
+    func deleteColumn(table: String, column: String) {
+        guard let ti = tables.firstIndex(where: { $0.name == table }), let ci = tables[ti].columnIndex(column) else { return }
+        tables[ti].columns.remove(at: ci)
+        for r in tables[ti].rows.indices { tables[ti].rows[r].remove(at: ci) }
+        recomputeCalculatedColumns()
+        crossFilter = nil
+        didChange()
+    }
+
+    /// Updates visuals, filters, relationships and expressions after a column rename.
+    func renameColumnReferences(table: String, from old: String, to new: String) {
+        func fix(_ f: inout FieldRef) { if f.table == table && f.column == old { f.column = new } }
+        for p in pages.indices {
+            for v in pages[p].visuals.indices {
+                for a in pages[p].visuals[v].axis.indices { fix(&pages[p].visuals[v].axis[a]) }
+                if pages[p].visuals[v].legend != nil { fix(&pages[p].visuals[v].legend!) }
+                for a in pages[p].visuals[v].values.indices where !pages[p].visuals[v].values[a].measure {
+                    fix(&pages[p].visuals[v].values[a].field)
+                }
+            }
+            for f in pages[p].filters.indices { fix(&pages[p].filters[f].field) }
+        }
+        for r in relationships.indices {
+            if relationships[r].fromTable == table && relationships[r].fromColumn == old { relationships[r].fromColumn = new }
+            if relationships[r].toTable == table && relationships[r].toColumn == old { relationships[r].toColumn = new }
+        }
+        for i in measures.indices {
+            measures[i].expression = Self.renameMeasureReferences(in: measures[i].expression, from: old, to: new)
+        }
+        for ti in tables.indices {
+            for ci in tables[ti].columns.indices {
+                if let e = tables[ti].columns[ci].expression {
+                    tables[ti].columns[ci].expression = Self.renameMeasureReferences(in: e, from: old, to: new)
+                }
+            }
+        }
+    }
+
     /// Validates and stores a draft. Returns an error message, or nil on success.
     func saveMeasure(_ d: MeasureDraft) -> String? {
+        if d.isColumn { return saveColumn(d) }
         let name = d.name.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return L("Donnez un nom à la mesure.") }
         guard !name.contains("[") && !name.contains("]") else { return L("Le nom ne peut pas contenir de crochets.") }
@@ -767,6 +885,16 @@ final class AppState {
 
     /// Preview of a draft over all rows (no filters).
     func previewMeasure(_ d: MeasureDraft) -> String {
+        if d.isColumn {
+            guard !d.expression.isEmpty else { return "" }
+            if let err = MeasureCompiler.validate(d.expression, home: d.table, name: "", model) { return "⚠︎ " + err }
+            do {
+                let (_, values) = try computeColumn(table: d.table, expression: d.expression)
+                return values.prefix(4).map { Fmt.cell($0).isEmpty ? L("(Vide)") : Fmt.cell($0) }.joined(separator: " · ")
+            } catch {
+                return "⚠︎ " + error.localizedDescription
+            }
+        }
         var probe = model
         probe.measures.removeAll { $0.id == d.id }
         let me = Measure(name: d.name.isEmpty ? "_" : d.name, table: d.table, expression: d.expression, format: d.format)
@@ -774,8 +902,16 @@ final class AppState {
         if let err = MeasureCompiler.validate(d.expression, home: d.table, name: me.name, probe) { return "⚠︎ " + err }
         let deps = MeasureCompiler.dependencies(me, probe)
         guard let ctx = Engine.context(for: deps.isEmpty ? [FieldRef(table: d.table, column: "")] : deps, probe) else { return "" }
-        let value = MeasureEvaluator(ctx: ctx, model: probe).evaluate(me, rows: ctx.rowIndices([]), filters: [])
-        return value.map { Fmt.measure($0, d.format, compact: false) } ?? "(Vide)"
+        do {
+            let value = try MeasureEvaluator(ctx: ctx, model: probe).evaluateValue(me, rows: ctx.rowIndices([]), filters: [])
+            switch value {
+            case .blank: return L("(Vide)")
+            case .text(let s): return s
+            default: return value.number.map { Fmt.measure($0, d.format, compact: false) } ?? value.string
+            }
+        } catch {
+            return "⚠︎ " + error.localizedDescription
+        }
     }
 
     static func renameMeasureReferences(in expr: String, from old: String, to new: String) -> String {

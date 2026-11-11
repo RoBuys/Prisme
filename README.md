@@ -31,6 +31,12 @@ import data, then build interactive reports with drag and drop. The interface is
   references, and `CALCULATE(expr, Table[Column] = value, ALL(…), ALLSELECTED(…), REMOVEFILTERS(…))`. The editor
   validates the expression as you type and previews its value; formats: integer, decimal, percentage, currency.
   Example: `Part du CA = DIVIDE([Chiffre d'affaires], CALCULATE([Chiffre d'affaires], ALLSELECTED(Ventes)))`.
+  Also: iterators `SUMX`, `AVERAGEX`, `MINX`, `MAXX`, `COUNTX` and `FILTER(table, condition)` (row context with
+  `RELATED`), comparison filters in `CALCULATE` (`Ventes[Montant] > 1000`), time intelligence (`TOTALYTD`,
+  `TOTALQTD`, `TOTALMTD`, `DATESYTD`, `DATESQTD`, `DATESMTD`, `SAMEPERIODLASTYEAR`, `DATEADD`, `PREVIOUSMONTH`,
+  `PREVIOUSYEAR`), text and date functions (`&`, `UPPER`, `LOWER`, `LEN`, `LEFT`, `RIGHT`, `YEAR`, `MONTH`, `DAY`).
+- **Calculated columns** (**Nouvelle colonne** / New column): an expression evaluated for each row (row context,
+  `RELATED`, measures with context transition), recomputed after each refresh.
 - **Undo / redo** (⌘Z / ⇧⌘Z) for every document change.
 - **Hover tooltips** on charts, optional **data labels**, and per-visual **formatting**: legend, gridlines, axis
   titles, main color, value format, sorting, **Top N**; click a table header to sort. Five report **themes**
@@ -89,8 +95,8 @@ renewed automatically.
 ## Known limitations
 
 - No many-to-many relationships, no bidirectional filtering.
-- Limited measure language: no iterators (`SUMX`, `FILTER`), no time intelligence (`TOTALYTD`,
-  `SAMEPERIODLASTYEAR`), no calculated columns; `CALCULATE` only accepts equality filters.
+- The measure language is a subset of DAX: no variables (`VAR`), no `SWITCH`, no calculated tables; `ALL` on a table
+  iterated by `SUMX` still respects other filters on that table's rows.
 - No query editor (Power Query).
 
 ## Structure

@@ -463,6 +463,7 @@ struct FieldsPane: View {
             .contextMenu {
                 Button(L("Afficher les données")) { state.dataTableName = t.name; state.mode = .data }
                 Button(L("Nouvelle mesure…")) { state.newMeasure(in: t.name) }
+                Button(L("Nouvelle colonne calculée…")) { state.newColumn(in: t.name) }
                 Button(L("Renommer…")) { draft = t.name; renaming = t.name }
                 if t.source != nil { Button(L("Actualiser")) { state.refreshAll() } }
                 Divider()
@@ -508,7 +509,10 @@ struct FieldsPane: View {
                     .foregroundStyle(used ? Theme.accent : .secondary)
             }
             Image(systemName: c.type.symbol).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 14)
-            Text(c.name).font(.system(size: 12)).lineLimit(1)
+            Text(c.name).font(.system(size: 12)).italic(c.expression != nil).lineLimit(1)
+            if c.expression != nil {
+                Image(systemName: "function").font(.system(size: 8)).foregroundStyle(Theme.accent)
+            }
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
@@ -520,7 +524,13 @@ struct FieldsPane: View {
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent.opacity(0.2)))
         }
-        .help(L("Cliquez pour ajouter au visuel sélectionné, ou glissez vers un emplacement de champ"))
+        .contextMenu {
+            if c.expression != nil {
+                Button(L("Modifier la colonne calculée…")) { state.editColumn(table: t.name, column: c) }
+                Button(L("Supprimer la colonne"), role: .destructive) { state.deleteColumn(table: t.name, column: c.name) }
+            }
+        }
+        .help(c.expression.map { L("Colonne calculée : %@", $0) } ?? L("Cliquez pour ajouter au visuel sélectionné, ou glissez vers un emplacement de champ"))
     }
 }
 

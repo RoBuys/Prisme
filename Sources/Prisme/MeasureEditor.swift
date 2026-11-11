@@ -20,21 +20,33 @@ struct MeasureEditor: View {
         ("ALLSELECTED", "ALLSELECTED(Table)", L("Dans CALCULATE : ignore la catégorie, garde les segments")),
         ("IF", L("IF(condition, alors, sinon)"), L("Condition")),
         ("ROUND", "ROUND(x, 2)", L("Arrondi")),
+        ("SUMX", L("SUMX(Table, Table[Colonne] * RELATED(Autre[Colonne]))"), L("Somme d'une expression ligne par ligne")),
+        ("FILTER", L("FILTER(Table, Table[Colonne] > 100)"), L("Lignes qui respectent une condition")),
+        ("RELATED", L("RELATED(Table[Colonne])"), L("Valeur de la table liée (contexte de ligne)")),
+        ("TOTALYTD", L("TOTALYTD([Mesure], Table[Date])"), L("Cumul depuis le début de l'année")),
+        ("SAMEPERIODLASTYEAR", L("CALCULATE([Mesure], SAMEPERIODLASTYEAR(Table[Date]))"), L("Même période l'an dernier")),
+        ("DATEADD", L("CALCULATE([Mesure], DATEADD(Table[Date], -1, MONTH))"), L("Décale la période")),
+        ("YEAR / MONTH", L("YEAR(Table[Date])"), L("Année d'une date (colonnes calculées)")),
+        ("&", "\"a\" & \"b\"", L("Concatène du texte")),
     ] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(draft.id == nil ? L("Nouvelle mesure") : L("Modifier la mesure")).font(.title3.weight(.semibold))
+            Text(draft.isColumn ? (draft.originalName == nil ? L("Nouvelle colonne calculée") : L("Modifier la colonne calculée"))
+                 : (draft.id == nil ? L("Nouvelle mesure") : L("Modifier la mesure"))).font(.title3.weight(.semibold))
             HStack(spacing: 12) {
                 TextField(L("Nom"), text: $draft.name).textFieldStyle(.roundedBorder).frame(width: 220)
                 Picker(L("Table"), selection: $draft.table) {
                     ForEach(state.tables) { Text($0.name).tag($0.name) }
                 }
                 .frame(width: 200)
-                Picker(L("Format"), selection: $draft.format) {
-                    ForEach(MeasureFormat.allCases, id: \.self) { Text($0.label).tag($0) }
+                .disabled(draft.isColumn && draft.originalName != nil)
+                if !draft.isColumn {
+                    Picker(L("Format"), selection: $draft.format) {
+                        ForEach(MeasureFormat.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .frame(width: 210)
                 }
-                .frame(width: 210)
             }
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -50,7 +62,7 @@ struct MeasureEditor: View {
                             Text(preview.dropFirst(2)).foregroundStyle(.secondary)
                         } else if !draft.expression.isEmpty {
                             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                            Text(L("Valeur sur toutes les données : ")).foregroundStyle(.secondary)
+                            Text(draft.isColumn ? L("Premières valeurs : ") : L("Valeur sur toutes les données : ")).foregroundStyle(.secondary)
                             Text(preview).fontWeight(.semibold)
                         }
                     }
@@ -86,6 +98,9 @@ struct MeasureEditor: View {
             HStack {
                 if let id = draft.id, let m = state.measures.first(where: { $0.id == id }) {
                     Button(L("Supprimer"), role: .destructive) { state.deleteMeasure(m); dismiss() }
+                }
+                if draft.isColumn, let old = draft.originalName {
+                    Button(L("Supprimer"), role: .destructive) { state.deleteColumn(table: draft.table, column: old); dismiss() }
                 }
                 Spacer()
                 Button(L("Annuler"), role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
