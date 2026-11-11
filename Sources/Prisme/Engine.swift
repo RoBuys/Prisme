@@ -268,30 +268,63 @@ struct QueryContext {
     private let model: DataModel
     /// For each related table: base row index → row index in that table (nil when unmatched).
     private var maps: [String: [Int?]] = [:]
+    private var rowCount = 0
 
     init(base: DataTable, model: DataModel) {
         self.base = base
         self.model = model
+        rowCount = base.rows.count
         let n = base.rows.count
         for (name, via) in model.reachable(from: base.name) {
             guard let r = via, let from = model.table(r.fromTable), let to = model.table(name),
                   let fc = from.columnIndex(r.fromColumn), let tc = to.columnIndex(r.toColumn) else { continue }
-            var lookup: [String: Int] = [:]
-            for (i, row) in to.rows.enumerated() {
-                let k = row[tc].joinKey
-                if !k.isEmpty && lookup[k] == nil { lookup[k] = i }
-            }
             let parent: [Int?]? = r.fromTable == base.name ? nil : maps[r.fromTable]
             if r.fromTable != base.name && parent == nil { continue }
-            let fromRows = from.rows
-            var map = [Int?](repeating: nil, count: n)
-            for b in 0..<n {
-                let fr: Int? = parent == nil ? b : parent![b]
-                guard let fr else { continue }
-                map[b] = lookup[fromRows[fr][fc].joinKey]
+            let fromRows = from.rows, toRows = to.rows
+            func build<K: Hashable>(_ key: (CellValue) -> K?) -> [Int?] {
+                var lookup: [K: Int] = [:]
+                lookup.reserveCapacity(toRows.count)
+                for (i, row) in toRows.enumerated() { if let k = key(row[tc]), lookup[k] == nil { lookup[k] = i } }
+                var map = [Int?](repeating: nil, count: n)
+                for b in 0..<n {
+                    let fr: Int? = parent == nil ? b : parent![b]
+                    guard let fr, let k = key(fromRows[fr][fc]) else { continue }
+                    map[b] = lookup[k]
+                }
+                return map
             }
-            maps[name] = map
+            // Same-type keys compare as values (formatting each one is slow on large tables).
+            switch (from.columns[fc].type, to.columns[tc].type) {
+            case (.number, .number):
+                maps[name] = build { c -> Double? in if case .number(let d) = c { return d }; return nil }
+            case (.date, .date):
+                maps[name] = build { c -> Int? in if case .date(let d) = c { return Int((d.timeIntervalSince1970 / 86_400).rounded(.down)) }; return nil }
+            case (.text, .text):
+                maps[name] = build { c -> String? in if case .text(let t) = c { let k = t.trimmingCharacters(in: .whitespaces).lowercased(); return k.isEmpty ? nil : k }; return nil }
+            default:
+                maps[name] = build { c -> String? in let k = c.joinKey; return k.isEmpty ? nil : k }
+            }
         }
+    }
+
+    private init(base: DataTable, model: DataModel, maps: [String: [Int?]], rowCount: Int) {
+        self.base = base
+        self.model = model
+        self.maps = maps
+        self.rowCount = rowCount
+    }
+
+    /// The same relationship maps over an updated copy of the base table (same rows, columns added),
+    /// e.g. between calculated columns: building the maps is the costly part on large tables.
+    func rebased(_ base: DataTable, _ model: DataModel) -> QueryContext {
+        guard base.name == self.base.name, base.rows.count == rowCount else { return QueryContext(base: base, model: model) }
+        return QueryContext(base: base, model: model, maps: maps, rowCount: rowCount)
+    }
+
+    /// Keeps only the relationship maps (releases the table data, so it can be modified in place).
+    func detached() -> QueryContext {
+        QueryContext(base: DataTable(name: base.name, columns: [], rows: []), model: DataModel(tables: [], relationships: [], measures: []),
+                     maps: maps, rowCount: rowCount)
     }
 
     func reaches(_ table: String) -> Bool { table == base.name || maps[table] != nil }

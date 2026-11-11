@@ -195,9 +195,19 @@ private struct Parser {
         }
     }
 
+    /// `&` binds less tightly than + and - (as in DAX: "a" & 1 + 2 is "a3").
     mutating func parseAdditive() throws -> Expr {
+        var l = try parseSum()
+        while case .op(let o) = current, o == "&" {
+            advance()
+            l = .binary(o, l, try parseSum())
+        }
+        return l
+    }
+
+    mutating func parseSum() throws -> Expr {
         var l = try parseMultiplicative()
-        while case .op(let o) = current, o == "+" || o == "-" || o == "&" {
+        while case .op(let o) = current, o == "+" || o == "-" {
             advance()
             l = .binary(o, l, try parseMultiplicative())
         }
@@ -279,9 +289,13 @@ private struct Parser {
 // MARK: - Compilation (parse + validation)
 
 enum MeasureCompiler {
-    private static var cache: [String: Result<Expr, MeasureError>] = [:]
+    nonisolated(unsafe) private static var cache: [String: Result<Expr, MeasureError>] = [:]
+    /// Calculated columns are evaluated on several threads.
+    private static let cacheLock = NSLock()
 
     static func parse(_ source: String) -> Result<Expr, MeasureError> {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
         if let r = cache[source] { return r }
         let r: Result<Expr, MeasureError>
         do {
@@ -305,6 +319,7 @@ enum MeasureCompiler {
         "SUMX": 2...2, "AVERAGEX": 2...2, "MINX": 2...2, "MAXX": 2...2, "COUNTX": 2...2, "FILTER": 2...2,
         "RELATED": 1...1, "YEAR": 1...1, "MONTH": 1...1, "DAY": 1...1, "UPPER": 1...1, "LOWER": 1...1,
         "LEN": 1...1, "LEFT": 2...2, "RIGHT": 2...2,
+        "MID": 3...3, "CEILING": 1...2, "FLOOR": 1...2, "TRIM": 1...1, "SUBSTITUTE": 3...4, "SEARCH": 2...4, "FIND": 2...4,
         "DATESYTD": 1...1, "DATESMTD": 1...1, "DATESQTD": 1...1, "SAMEPERIODLASTYEAR": 1...1, "DATEADD": 3...3,
         "PREVIOUSMONTH": 1...1, "PREVIOUSYEAR": 1...1, "TOTALYTD": 2...2, "TOTALMTD": 2...2, "TOTALQTD": 2...2,
         "SWITCH": 3...1001, "SELECTEDVALUE": 1...2, "HASONEVALUE": 1...1, "ISFILTERED": 1...1, "VALUES": 1...1,
@@ -847,7 +862,9 @@ final class MeasureEvaluator {
         return try eval(e, home: me.table, rows: rows, filters: filters, row: nil, depth: 0)
     }
 
-    private lazy var allBaseRows = Array(ctx.base.rows.indices)
+    private lazy var allBaseRows = sharedAllRows ?? Array(ctx.base.rows.indices)
+    /// All base rows, shared by the evaluators of a parallel calculated column.
+    var sharedAllRows: [Int]?
 
     /// Calculated column value for one row of the base table. As in DAX, aggregations see the whole table;
     /// measures see the current row (context transition).
@@ -879,10 +896,15 @@ final class MeasureEvaluator {
     }
 
     /// Value of a column for the current row (following relationships from the row's table, like RELATED).
+    private var accessors: [Key: (Int) -> CellValue] = [:]
+
     private func cellValue(_ f: FieldRef, _ rc: RowContext) throws -> MValue {
+        let key = Key(a: rc.table, b: f.table, c: f.column)
+        if let get = accessors[key] { return MValue(get(rc.row)) }
         guard let qc = tableContext(rc.table), let get = qc.accessor(f) else {
             throw MeasureError(message: L("Aucune relation ne relie %@ à %@.", f.table, rc.table))
         }
+        accessors[key] = get
         return MValue(get(rc.row))
     }
 
@@ -912,8 +934,8 @@ final class MeasureEvaluator {
             }
             return try eval(body, home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
         case .ref(let t, let n):
-            if let v = row?.values[n.lowercased()] { return v }
-            switch MeasureCompiler.resolve(table: t, name: n, home: home, model) {
+            if let r = row, !r.values.isEmpty, let v = r.values[n.lowercased()] { return v }
+            switch resolve(t, n, home) {
             case .measure(let me):
                 guard case .success(let inner) = MeasureCompiler.parse(me.expression) else { return .blank }
                 if let rc = row {
@@ -940,6 +962,13 @@ final class MeasureEvaluator {
             let x = try sub(a), y = try sub(b)
             switch o {
             case "&": return .text(x.string + y.string)
+            case "+" where Self.isDate(x) || Self.isDate(y), "-" where Self.isDate(x) || Self.isDate(y):
+                // Dates count in days: date - date is a number of days, date ± n moves by n days.
+                if x.isBlank && y.isBlank { return .blank }
+                let p = Self.days(x), q = Self.days(y)
+                let r = o == "+" ? p + q : p - q
+                if Self.isDate(x) && Self.isDate(y) && o == "-" { return .number(r) }
+                return .date(Date(timeIntervalSince1970: r * 86_400))
             case "+", "-", "*":
                 if x.isBlank && y.isBlank { return .blank }
                 let p = x.number ?? 0, q = y.number ?? 0
@@ -953,6 +982,40 @@ final class MeasureEvaluator {
         case .call(let f, let args):
             return try call(f, args, home: home, rows: rows, filters: filters, row: row, depth: depth)
         }
+    }
+
+    /// Year, month and day of a UTC timestamp (Fmt.calendar is UTC), without Calendar's cost on large tables.
+    /// Days-to-civil algorithm by Howard Hinnant.
+    static func civil(_ t: Double) -> (year: Int, month: Int, day: Int) {
+        let z = Int((t / 86_400).rounded(.down)) + 719_468
+        let era = (z >= 0 ? z : z - 146_096) / 146_097
+        let doe = z - era * 146_097
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        let mp = (5 * doy + 2) / 153
+        let d = doy - (153 * mp + 2) / 5 + 1
+        let m = mp < 10 ? mp + 3 : mp - 9
+        return (yoe + era * 400 + (m <= 2 ? 1 : 0), m, d)
+    }
+
+    private static func isDate(_ v: MValue) -> Bool { if case .date = v { return true }; return false }
+
+    /// A value in days (dates since 1970, numbers as they are).
+    private static func days(_ v: MValue) -> Double {
+        if case .date(let d) = v { return d.timeIntervalSince1970 / 86_400 }
+        return v.number ?? 0
+    }
+
+    /// References resolved once per evaluator (bare names otherwise scan every measure on each row).
+    private struct Key: Hashable { let a: String?, b: String, c: String }
+    private var resolved: [Key: MeasureCompiler.Resolved?] = [:]
+
+    private func resolve(_ t: String?, _ n: String, _ home: String) -> MeasureCompiler.Resolved? {
+        let key = Key(a: t, b: n, c: home)
+        if let r = resolved[key] { return r }
+        let r = MeasureCompiler.resolve(table: t, name: n, home: home, model)
+        resolved[key] = r
+        return r
     }
 
     private func compare(_ x: MValue, _ y: MValue, _ o: String) -> Bool {
@@ -978,7 +1041,7 @@ final class MeasureEvaluator {
     }
 
     private func column(_ e: Expr, home: String) throws -> FieldRef {
-        guard case .ref(let t, let n) = e, case .column(let f) = MeasureCompiler.resolve(table: t, name: n, home: home, model) else {
+        guard case .ref(let t, let n) = e, case .column(let f) = resolve(t, n, home) else {
             throw MeasureError(message: L("Colonne attendue."))
         }
         return f
@@ -1371,8 +1434,8 @@ final class MeasureEvaluator {
             return .blank
         case "YEAR", "MONTH", "DAY":
             guard let t = try sub(args[0]).number else { return .blank }
-            let c = Fmt.calendar.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: t))
-            return .number(Double((f == "YEAR" ? c.year : f == "MONTH" ? c.month : c.day) ?? 0))
+            let c = Self.civil(t)
+            return .number(Double(f == "YEAR" ? c.year : f == "MONTH" ? c.month : c.day))
         case "UPPER": return .text(try sub(args[0]).string.uppercased())
         case "LOWER": return .text(try sub(args[0]).string.lowercased())
         case "LEN": return .number(Double(try sub(args[0]).string.count))
@@ -1380,6 +1443,38 @@ final class MeasureEvaluator {
             let s = try sub(args[0]).string
             let n = Swift.max(0, Int(try sub(args[1]).number ?? 0))
             return .text(String(f == "LEFT" ? s.prefix(n) : s.suffix(n)))
+        case "MID":
+            let s = try sub(args[0]).string
+            let start = Swift.max(1, Int(try sub(args[1]).number ?? 1)), n = Swift.max(0, Int(try sub(args[2]).number ?? 0))
+            return .text(String(s.dropFirst(start - 1).prefix(n)))
+        case "CEILING", "FLOOR":
+            guard let x = try sub(args[0]).number else { return .blank }
+            let step = args.count > 1 ? (try sub(args[1]).number ?? 1) : 1
+            guard step != 0 else { return .number(0) }
+            return .number((f == "CEILING" ? (x / step).rounded(.up) : (x / step).rounded(.down)) * step)
+        case "TRIM":
+            return .text(try sub(args[0]).string.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " "))
+        case "SUBSTITUTE":
+            let s = try sub(args[0]).string, old = try sub(args[1]).string, new = try sub(args[2]).string
+            guard !old.isEmpty else { return .text(s) }
+            if args.count > 3, let k = try sub(args[3]).number {
+                var parts = s.components(separatedBy: old)
+                let i = Int(k)
+                guard i >= 1, i < parts.count else { return .text(s) }
+                parts[i - 1] += new + parts[i]
+                parts.remove(at: i)
+                return .text(parts.joined(separator: old))
+            }
+            return .text(s.replacingOccurrences(of: old, with: new))
+        case "SEARCH", "FIND":
+            let find = try sub(args[0]).string, within = try sub(args[1]).string
+            let start = args.count > 2 ? Swift.max(1, Int(try sub(args[2]).number ?? 1)) : 1
+            let hay = String(within.dropFirst(start - 1))
+            let options: String.CompareOptions = f == "SEARCH" ? [.caseInsensitive] : []
+            if let r = hay.range(of: find, options: options) {
+                return .number(Double(hay.distance(from: hay.startIndex, to: r.lowerBound) + start))
+            }
+            return args.count > 3 ? try sub(args[3]) : .blank
         case "SWITCH":
             let x = try sub(args[0])
             var i = 1

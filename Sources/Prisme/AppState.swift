@@ -908,7 +908,7 @@ final class AppState {
         } else {
             let raw = Importer.cellsToRaw(tables[ti].rows.map { $0[ci] })
             let converted = Importer.coerce(raw, to: type)
-            for r in tables[ti].rows.indices { tables[ti].rows[r][ci] = converted[r] }
+            var rows = tables[ti].rows; for r in rows.indices { rows[r][ci] = converted[r] }; tables[ti].rows = rows
             tables[ti].columns[ci].type = type
         }
         // Fields whose aggregation no longer makes sense fall back to a count.
@@ -1066,7 +1066,8 @@ final class AppState {
     }
 
     /// Evaluates a column expression for every row of the table.
-    func computeColumn(table: String, expression: String, model m: DataModel? = nil) throws -> (ColumnType, [CellValue]) {
+    func computeColumn(table: String, expression: String, model m: DataModel? = nil,
+                       context: QueryContext? = nil) throws -> (ColumnType, [CellValue]) {
         let m = m ?? model
         guard let t = m.table(table) else { throw MeasureError(message: L("Table introuvable : %@", table)) }
         let e: Expr
@@ -1074,8 +1075,33 @@ final class AppState {
         case .success(let x): e = x
         case .failure(let err): throw err
         }
-        let ev = MeasureEvaluator(ctx: QueryContext(base: t, model: m), model: m)
-        let values = try t.rows.indices.map { try ev.evaluateRow(e, row: $0) }
+        let values: [MValue]
+        let ctx = context ?? QueryContext(base: t, model: m)
+        if t.rows.count < 20_000 {
+            let ev = MeasureEvaluator(ctx: ctx, model: m)
+            values = try t.rows.indices.map { try ev.evaluateRow(e, row: $0) }
+        } else {
+            // Large tables: rows split across cores, one evaluator per chunk.
+            let chunks = min(ProcessInfo.processInfo.activeProcessorCount * 2, 32)
+            let size = (t.rows.count + chunks - 1) / chunks
+            var parts = [[MValue]](repeating: [], count: chunks)
+            let allRows = Array(t.rows.indices)
+            var failure: Error?
+            let lock = NSLock()
+            parts.withUnsafeMutableBufferPointer { out in
+                let out = out
+                DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                    let range = (c * size)..<min((c + 1) * size, t.rows.count)
+                    guard !range.isEmpty else { return }
+                    let ev = MeasureEvaluator(ctx: ctx, model: m)
+                    ev.sharedAllRows = allRows
+                    do { out[c] = try range.map { try ev.evaluateRow(e, row: $0) } }
+                    catch { lock.lock(); failure = failure ?? error; lock.unlock() }
+                }
+            }
+            if let failure { throw failure }
+            values = parts.flatMap { $0 }
+        }
         let present = values.filter { !$0.isBlank }
         if !present.isEmpty && present.allSatisfy({ if case .date = $0 { return true }; return false }) {
             return (.date, values.map(\.cell))
@@ -1177,10 +1203,20 @@ final class AppState {
 
     private func recomputeColumnsOnly(in only: Set<String>? = nil) {
         for ti in tables.indices where only?.contains(tables[ti].name) ?? true {
+            var maps: QueryContext?   // relationship maps built once per table
             for ci in tables[ti].columns.indices {
                 guard let expr = tables[ti].columns[ci].expression else { continue }
-                let result = try? computeColumn(table: tables[ti].name, expression: expr)
-                for r in tables[ti].rows.indices { tables[ti].rows[r][ci] = result?.1[r] ?? .empty }
+                let result: (ColumnType, [CellValue])? = {
+                    let m = model
+                    let c = maps.map { $0.rebased(tables[ti], m) } ?? QueryContext(base: tables[ti], model: m)
+                    maps = c.detached()
+                    return try? computeColumn(table: tables[ti].name, expression: expr, model: m, context: c)
+                }()
+                // The rows are now referenced only by the table: written in place, one change to the observed state.
+                var rows: [[CellValue]] = []
+                swap(&rows, &tables[ti].rows)
+                for r in rows.indices { rows[r][ci] = result?.1[r] ?? .empty }
+                swap(&rows, &tables[ti].rows)
                 if let type = result?.0 { tables[ti].columns[ci].type = type }
             }
         }
@@ -1201,11 +1237,11 @@ final class AppState {
 
         if let old = d.originalName, let ci = tables[ti].columnIndex(old) {
             tables[ti].columns[ci] = DataColumn(name: name, type: result.0, expression: d.expression)
-            for r in tables[ti].rows.indices { tables[ti].rows[r][ci] = result.1[r] }
+            var rows = tables[ti].rows; for r in rows.indices { rows[r][ci] = result.1[r] }; tables[ti].rows = rows
             if old != name { renameColumnReferences(table: d.table, from: old, to: name) }
         } else {
             tables[ti].columns.append(DataColumn(name: name, type: result.0, expression: d.expression))
-            for r in tables[ti].rows.indices { tables[ti].rows[r].append(result.1[r]) }
+            var rows = tables[ti].rows; for r in rows.indices { rows[r].append(result.1[r]) }; tables[ti].rows = rows
         }
         recomputeCalculatedColumns()
         didChange()
@@ -1215,7 +1251,7 @@ final class AppState {
     func deleteColumn(table: String, column: String) {
         guard let ti = tables.firstIndex(where: { $0.name == table }), let ci = tables[ti].columnIndex(column) else { return }
         tables[ti].columns.remove(at: ci)
-        for r in tables[ti].rows.indices { tables[ti].rows[r].remove(at: ci) }
+        var rows = tables[ti].rows; for r in rows.indices { rows[r].remove(at: ci) }; tables[ti].rows = rows
         recomputeCalculatedColumns()
         crossFilter = nil
         didChange()
