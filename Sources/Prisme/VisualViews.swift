@@ -31,7 +31,7 @@ struct VisualContentView: View {
         let selected = state.highlighted(in: visual)
         let onSelect: (String?) -> Void = { label in state.chartClicked(visual, label: label) }
         switch visual.type {
-        case .column, .bar, .line, .area:
+        case .column, .bar, .line, .area, .stackedColumn, .stackedBar, .percentColumn:
             CartesianChartView(data: Engine.chartData(visual, state.model, filters), type: visual.type,
                                format: visual.fmt, selected: selected, onSelect: onSelect)
         case .pie, .donut:
@@ -42,7 +42,8 @@ struct VisualContentView: View {
                            title: visual.showTitle && !visual.title.isEmpty ? visual.title : nil)
         case .table:
             TableVisualView(data: Engine.tableData(visual, state.model, filters), selected: selected, onSelect: onSelect,
-                            sortColumn: visual.fmt.tableSortColumn, sortDescending: visual.fmt.tableSortDescending) { col in
+                            sortColumn: visual.fmt.tableSortColumn, sortDescending: visual.fmt.tableSortDescending,
+                            rules: visual.fmt.conditional) { col in
                 state.mutateFormat(visual.id) { f in
                     if f.tableSortColumn == col { f.tableSortDescending.toggle() } else { f.tableSortColumn = col; f.tableSortDescending = col > 0 }
                 }
@@ -56,7 +57,8 @@ struct VisualContentView: View {
             ScatterVisualView(data: Engine.chartData(visual, state.model, filters), format: visual.fmt,
                               selected: selected, onSelect: onSelect)
         case .matrix:
-            TableVisualView(data: Engine.matrixData(visual, state.model, filters), selected: selected, onSelect: onSelect)
+            TableVisualView(data: Engine.matrixData(visual, state.model, filters), selected: selected, onSelect: onSelect,
+                            rules: visual.fmt.conditional)
         case .gauge:
             GaugeVisualView(values: Engine.scalars(visual, state.model, filters), label: visual.values.first?.displayName ?? "",
                             format: Engine.valueFormat(visual, state.model), color: Theme.colors(1, first: visual.fmt.color)[0])
@@ -64,6 +66,10 @@ struct VisualContentView: View {
             KPIVisualView(values: Engine.scalars(visual, state.model, filters), label: visual.values.first?.displayName ?? "",
                           format: Engine.valueFormat(visual, state.model), trend: kpiTrend(filters),
                           color: Theme.colors(1, first: visual.fmt.color)[0])
+        case .waterfall:
+            WaterfallView(data: Engine.chartData(visual, state.model, filters), format: visual.fmt, selected: selected, onSelect: onSelect)
+        case .funnel:
+            FunnelView(data: Engine.chartData(visual, state.model, filters), format: visual.fmt, selected: selected, onSelect: onSelect)
         case .map:
             MapVisualView(data: Engine.chartData(visual, state.model, filters), format: visual.fmt,
                           selected: selected, onSelect: onSelect)
@@ -135,7 +141,7 @@ struct CartesianChartView: View {
     var body: some View {
         if let m = data.message {
             PlaceholderView(message: m, symbol: type.symbol)
-        } else if type == .bar {
+        } else if type.isHorizontal {
             base
                 .chartXAxis { valueAxis(.bottom) }
                 .chartYScale(domain: data.categories)
@@ -163,9 +169,29 @@ struct CartesianChartView: View {
 
     private func label(_ v: Double) -> String { Fmt.measure(v, data.format, compact: true) }
 
+    /// Single-series bars colored by value.
+    private var byValue: Bool { format.colorByValue && data.series.count == 1 && (type == .column || type == .bar) }
+
+    private func valueColor(_ v: Double) -> Color {
+        let values = data.points.map(\.value)
+        guard let lo = values.min(), let hi = values.max(), hi > lo else { return Color(hexString: format.highColor) ?? .blue }
+        return Color.mix(Color(hexString: format.lowColor) ?? .white, Color(hexString: format.highColor) ?? .blue, (v - lo) / (hi - lo))
+    }
+
     private var base: some View {
         Chart(data.points) { p in
-            if type == .bar {
+            if type.isHorizontal && byValue {
+                BarMark(x: .value("v", p.value), y: .value("c", p.category))
+                    .foregroundStyle(valueColor(p.value))
+                    .opacity(opacity(p))
+                    .annotation(position: .trailing, spacing: 2) {
+                        if format.dataLabels { Text(label(p.value)).font(.system(size: 9)).foregroundStyle(.secondary) }
+                    }
+            } else if type == .stackedBar {
+                BarMark(x: .value("v", p.value), y: .value("c", p.category))
+                    .foregroundStyle(by: .value("s", p.series))
+                    .opacity(opacity(p))
+            } else if type == .bar {
                 BarMark(x: .value("v", p.value), y: .value("c", p.category))
                     .foregroundStyle(by: .value("s", p.series))
                     .position(by: .value("s", p.series))
@@ -173,6 +199,17 @@ struct CartesianChartView: View {
                     .annotation(position: .trailing, spacing: 2) {
                         if format.dataLabels { Text(label(p.value)).font(.system(size: 9)).foregroundStyle(.secondary) }
                     }
+            } else if type == .stackedColumn {
+                BarMark(x: .value("c", p.category), y: .value("v", p.value))
+                    .foregroundStyle(by: .value("s", p.series))
+                    .opacity(opacity(p))
+                    .annotation(position: .overlay) {
+                        if format.dataLabels { Text(label(p.value)).font(.system(size: 8)).foregroundStyle(.white) }
+                    }
+            } else if type == .percentColumn {
+                BarMark(x: .value("c", p.category), y: .value("v", p.value), stacking: .normalized)
+                    .foregroundStyle(by: .value("s", p.series))
+                    .opacity(opacity(p))
             } else if type == .line {
                 LineMark(x: .value("c", p.category), y: .value("v", p.value))
                     .foregroundStyle(by: .value("s", p.series))
@@ -195,6 +232,13 @@ struct CartesianChartView: View {
                 PointMark(x: .value("c", p.category), y: .value("v", p.value))
                     .foregroundStyle(by: .value("s", p.series))
                     .symbolSize(22)
+                    .annotation(position: .top, spacing: 2) {
+                        if format.dataLabels { Text(label(p.value)).font(.system(size: 9)).foregroundStyle(.secondary) }
+                    }
+            } else if byValue {
+                BarMark(x: .value("c", p.category), y: .value("v", p.value))
+                    .foregroundStyle(valueColor(p.value))
+                    .opacity(opacity(p))
                     .annotation(position: .top, spacing: 2) {
                         if format.dataLabels { Text(label(p.value)).font(.system(size: 9)).foregroundStyle(.secondary) }
                     }
@@ -239,7 +283,7 @@ struct CartesianChartView: View {
         guard let pf = proxy.plotFrame else { return nil }
         let frame = geo[pf]
         guard frame.contains(loc) else { return nil }
-        return type == .bar
+        return type.isHorizontal
             ? proxy.value(atY: loc.y - frame.minY, as: String.self)
             : proxy.value(atX: loc.x - frame.minX, as: String.self)
     }
@@ -265,7 +309,13 @@ struct CartesianChartView: View {
         AxisMarks(position: position) { v in
             if format.gridlines { AxisGridLine() }
             AxisValueLabel {
-                if let d = v.as(Double.self) { Text(Fmt.measure(d, data.format == .percent ? .percent : .auto, compact: true)) }
+                if let d = v.as(Double.self) {
+                    if type == .percentColumn {
+                        Text((d > 1.0001 ? d / 100 : d).formatted(.percent.precision(.fractionLength(0))))
+                    } else {
+                        Text(Fmt.measure(d, data.format == .percent ? .percent : .auto, compact: true))
+                    }
+                }
             }
         }
     }
@@ -395,6 +445,7 @@ struct TableVisualView: View {
     let onSelect: (String?) -> Void
     var sortColumn: Int?
     var sortDescending = false
+    var rules: [String: ConditionalRule] = [:]
     var onSort: (Int) -> Void = { _ in }
 
     var body: some View {
@@ -407,7 +458,7 @@ struct TableVisualView: View {
                     Section {
                         ForEach(data.rows.indices, id: \.self) { i in
                             let key = data.rowKeys[i]
-                            row(data.rows[i], widths: widths, bold: false)
+                            row(data.rows[i], widths: widths, bold: false, index: i)
                                 .background(i % 2 == 1 ? Color.black.opacity(0.025) : Color.clear)
                                 .background(selected == key ? Theme.accent.opacity(0.14) : Color.clear)
                                 .opacity(selected == nil || selected == key ? 1 : 0.45)
@@ -464,14 +515,65 @@ struct TableVisualView: View {
         .foregroundStyle(Color(hex: 0x252A33))
     }
 
-    private func row(_ cells: [String], widths: [CGFloat], bold: Bool) -> some View {
-        HStack(spacing: 0) {
+    private func rule(_ c: Int) -> ConditionalRule? {
+        guard c < data.valueIDs.count, let id = data.valueIDs[c], let r = rules[id.uuidString], r.kind != .none else { return nil }
+        return r
+    }
+
+    /// Min / max of a column's raw values, for conditional formatting.
+    private func range(_ c: Int) -> ClosedRange<Double>? {
+        let v = data.raw.compactMap { c < $0.count ? Double($0[c]) : nil }
+        guard let lo = v.min(), let hi = v.max() else { return nil }
+        return lo...hi
+    }
+
+    @ViewBuilder
+    private func decoration(_ c: Int, _ index: Int?, width: CGFloat, ranges: [Int: ClosedRange<Double>]) -> some View {
+        if let i = index, let r = rule(c), i < data.raw.count, c < data.raw[i].count,
+           let v = Double(data.raw[i][c]), let span = ranges[c] {
+            let t = span.upperBound > span.lowerBound ? (v - span.lowerBound) / (span.upperBound - span.lowerBound) : 1
+            switch r.kind {
+            case .colorScale:
+                Color.mix(Color(hexString: r.low) ?? .white, Color(hexString: r.high) ?? .green, t)
+            case .dataBars:
+                HStack(spacing: 0) {
+                    RoundedRectangle(cornerRadius: 2).fill((Color(hexString: r.high) ?? Theme.accent).opacity(0.55))
+                        .frame(width: max(2, (width + 8) * CGFloat(span.lowerBound < 0 ? t : max(0, v) / max(span.upperBound, 1e-9))))
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 2)
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func icon(_ c: Int, _ index: Int?, ranges: [Int: ClosedRange<Double>]) -> (String, Color)? {
+        guard let i = index, let r = rule(c), r.kind == .icons, i < data.raw.count, c < data.raw[i].count,
+              let v = Double(data.raw[i][c]), let span = ranges[c], span.upperBound > span.lowerBound else { return nil }
+        let t = (v - span.lowerBound) / (span.upperBound - span.lowerBound)
+        if t >= 2.0 / 3 { return ("arrowtriangle.up.fill", Color(hex: 0x2BA37A)) }
+        if t >= 1.0 / 3 { return ("circle.fill", Color(hex: 0xE0A800)) }
+        return ("arrowtriangle.down.fill", Color(hex: 0xD9534F))
+    }
+
+    private func row(_ cells: [String], widths: [CGFloat], bold: Bool, index: Int? = nil) -> some View {
+        let ranges = index == nil ? [:] : Dictionary(uniqueKeysWithValues: cells.indices.compactMap { c in
+            rule(c).flatMap { _ in range(c) }.map { (c, $0) }
+        })
+        return HStack(spacing: 0) {
             ForEach(cells.indices, id: \.self) { c in
-                Text(cells[c])
-                    .font(.system(size: 11, weight: bold ? .semibold : .regular))
-                    .lineLimit(1)
-                    .frame(width: widths[c], alignment: data.numeric[c] ? .trailing : .leading)
-                    .padding(.horizontal, 4)
+                HStack(spacing: 3) {
+                    if let (sym, color) = icon(c, index, ranges: ranges) {
+                        Image(systemName: sym).font(.system(size: 8)).foregroundStyle(color)
+                    }
+                    Text(cells[c])
+                        .font(.system(size: 11, weight: bold ? .semibold : .regular))
+                        .lineLimit(1)
+                }
+                .frame(width: widths[c], alignment: data.numeric[c] ? .trailing : .leading)
+                .padding(.horizontal, 4)
+                .background(decoration(c, index, width: widths[c], ranges: ranges))
             }
         }
         .padding(.vertical, 4)

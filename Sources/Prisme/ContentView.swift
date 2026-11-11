@@ -44,6 +44,17 @@ extension Color {
     }
 }
 
+extension Color {
+    /// Linear blend between two colors (t from 0 to 1).
+    static func mix(_ a: Color, _ b: Color, _ t: Double) -> Color {
+        let x = NSColor(a).usingColorSpace(.sRGB) ?? .white, y = NSColor(b).usingColorSpace(.sRGB) ?? .black
+        let k = min(max(t, 0), 1)
+        return Color(.sRGB, red: Double(x.redComponent + (y.redComponent - x.redComponent) * k),
+                     green: Double(x.greenComponent + (y.greenComponent - x.greenComponent) * k),
+                     blue: Double(x.blueComponent + (y.blueComponent - x.blueComponent) * k))
+    }
+}
+
 extension View {
     @ViewBuilder
     func applyIf<V: View>(_ condition: Bool, _ transform: (Self) -> V) -> some View {

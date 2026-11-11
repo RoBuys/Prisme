@@ -148,6 +148,8 @@ struct TableData {
     var totals: [String]?
     var message: String?
     var totalRowCount = 0
+    /// Value field behind each column (nil for grouping columns), for conditional formatting.
+    var valueIDs: [UUID?] = []
 }
 
 struct Acc {
@@ -549,6 +551,7 @@ enum Engine {
         var data = TableData()
         data.headers = axes.map { $0.0.displayName } + vals.map { $0.0.displayName }
         data.numeric = axes.map { _ in false } + vals.map { _ in true }
+        data.valueIDs = axes.map { _ in nil } + vals.map { $0.0.id }
         let keys = groups.keys.sorted { a, b in
             for (x, y) in zip(a, b) where x != y { return x < y }
             return false
@@ -636,6 +639,7 @@ enum Engine {
         var data = TableData()
         data.headers = axes.map { $0.0.displayName } + cols.map(\.label) + [L("Total")]
         data.numeric = axes.map { _ in false } + cols.map { _ in true } + [true]
+        data.valueIDs = axes.map { _ in nil } + cols.map { _ in vf.id } + [nil]
         data.totalRowCount = rowKeys.count
         for rk in rowKeys.prefix(limit) {
             let rf = rowFilters(rk)

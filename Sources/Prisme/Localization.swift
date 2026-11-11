@@ -622,6 +622,22 @@ enum Strings {
         "FORMAT([Mesure], \"#,##0.00\")": "FORMAT([Measure], \"#,##0.00\")",
         "Met en forme un nombre ou une date": "Formats a number or a date",
 
+        // Stacked charts & conditional formatting
+        "Histogramme empilé": "Stacked column chart",
+        "Barres empilées": "Stacked bar chart",
+        "Histogramme empilé 100 %": "100% stacked column chart",
+        "Cascade": "Waterfall chart",
+        "Entonnoir": "Funnel",
+        "Aucune": "None",
+        "Échelle de couleurs": "Color scale",
+        "Barres de données": "Data bars",
+        "Icônes": "Icons",
+        "Couleur selon la valeur": "Color by value",
+        "Min": "Min",
+        "Max": "Max",
+        "Couleur": "Color",
+        "Mise en forme conditionnelle": "Conditional formatting",
+
         // Export
         "Exporter": "Export",
         "PDF": "PDF",

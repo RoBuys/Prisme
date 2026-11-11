@@ -25,7 +25,9 @@ import data, then build interactive reports with drag and drop. The interface is
 - **Visuals**: column, bar, line, area, pie, donut, card, table, slicer, **matrix** (cross-tab with row and column
   totals), **scatter** (X / Y / bubble size), **line and column** combo, **gauge** (value, target, maximum), **KPI**
   (value vs target with a trend sparkline) and **map** (bubbles sized by value; place names are geocoded with
-  Apple's geocoding service and cached locally). The sample dataset has a second page showing them.
+  Apple's geocoding service and cached locally). Also **stacked** column / bar, **100% stacked** column, **waterfall**
+  and **funnel** charts.
+- **Conditional formatting**: color scales, data bars and icons on table / matrix values; bars colored by value. The sample dataset has a second page showing them.
 - **Fields pane**: drag columns into Axis / Legend / Values, or click them to add them to the selected visual.
   Aggregations: sum, average, min, max, count, distinct count. Date hierarchy (year, quarter, month, day).
 - **Filters**: slicers, page filters (Filters pane) and **cross-filtering** (click a bar, a slice, a point or a table

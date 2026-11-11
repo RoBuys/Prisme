@@ -215,6 +215,7 @@ struct ValueField: Hashable, Codable, Identifiable {
 
 enum VisualType: String, Codable, CaseIterable, Identifiable {
     case column, bar, line, area, pie, donut, card, table, slicer, matrix, scatter, combo, gauge, kpi, map
+    case stackedColumn, stackedBar, percentColumn, waterfall, funnel
     var id: String { rawValue }
 
     var label: String {
@@ -234,6 +235,11 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
         case .gauge: L("Jauge")
         case .kpi: L("Indicateur clé (KPI)")
         case .map: L("Carte géographique")
+        case .stackedColumn: L("Histogramme empilé")
+        case .stackedBar: L("Barres empilées")
+        case .percentColumn: L("Histogramme empilé 100 %")
+        case .waterfall: L("Cascade")
+        case .funnel: L("Entonnoir")
         }
     }
 
@@ -254,12 +260,19 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
         case .gauge: "gauge.with.dots.needle.67percent"
         case .kpi: "arrow.up.right.circle"
         case .map: "map"
+        case .stackedColumn: "square.stack.fill"
+        case .stackedBar: "rectangle.split.3x1.fill"
+        case .percentColumn: "percent"
+        case .waterfall: "chart.bar.xaxis.ascending"
+        case .funnel: "line.3.horizontal.decrease"
         }
     }
 
-    var isCartesian: Bool { [.column, .bar, .line, .area].contains(self) }
+    var isCartesian: Bool { [.column, .bar, .line, .area, .stackedColumn, .stackedBar, .percentColumn].contains(self) }
+    var isHorizontal: Bool { self == .bar || self == .stackedBar }
+    var isStacked: Bool { [.stackedColumn, .stackedBar, .percentColumn].contains(self) }
     /// Charts drawn on category / value axes (formatting options apply).
-    var isAxisChart: Bool { isCartesian || self == .combo || self == .scatter }
+    var isAxisChart: Bool { isCartesian || [.combo, .scatter, .waterfall].contains(self) }
     /// Value wells are fixed slots (X, Y, size…) rather than a list.
     var usesValueSlots: Bool { [.scatter, .combo, .gauge, .kpi, .map].contains(self) }
     /// The value list can hold several fields.
@@ -295,6 +308,25 @@ enum SortMode: String, Codable, CaseIterable {
     }
 }
 
+struct ConditionalRule: Hashable, Codable {
+    enum Kind: String, Codable, CaseIterable {
+        case none, colorScale, dataBars, icons
+
+        var label: String {
+            switch self {
+            case .none: L("Aucune")
+            case .colorScale: L("Échelle de couleurs")
+            case .dataBars: L("Barres de données")
+            case .icons: L("Icônes")
+            }
+        }
+    }
+
+    var kind: Kind = .none
+    var low = "F8D7DA"
+    var high = "B7E4C7"
+}
+
 /// Per-visual formatting options (all optional in saved files).
 struct VisualFormat: Hashable, Codable {
     var dataLabels = false
@@ -310,11 +342,18 @@ struct VisualFormat: Hashable, Codable {
     /// Table visual: column used for sorting, and its direction.
     var tableSortColumn: Int?
     var tableSortDescending = false
+    /// Charts: color each bar by its value, from `lowColor` to `highColor`.
+    var colorByValue = false
+    var lowColor = "F2D7D5"
+    var highColor = "1F6F43"
+    /// Tables and matrices: conditional formatting per value field (key = ValueField id).
+    var conditional: [String: ConditionalRule] = [:]
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
         case dataLabels, showLegend, gridlines, axisTitles, color, valueFormat, sort, topN, tableSortColumn, tableSortDescending
+        case colorByValue, lowColor, highColor, conditional
     }
 
     init(from decoder: Decoder) throws {
@@ -329,6 +368,10 @@ struct VisualFormat: Hashable, Codable {
         topN = try c.decodeIfPresent(Int.self, forKey: .topN) ?? 0
         tableSortColumn = try c.decodeIfPresent(Int.self, forKey: .tableSortColumn)
         tableSortDescending = try c.decodeIfPresent(Bool.self, forKey: .tableSortDescending) ?? false
+        colorByValue = try c.decodeIfPresent(Bool.self, forKey: .colorByValue) ?? false
+        lowColor = try c.decodeIfPresent(String.self, forKey: .lowColor) ?? "F2D7D5"
+        highColor = try c.decodeIfPresent(String.self, forKey: .highColor) ?? "1F6F43"
+        conditional = try c.decodeIfPresent([String: ConditionalRule].self, forKey: .conditional) ?? [:]
     }
 }
 
@@ -351,7 +394,7 @@ struct Visual: Identifiable, Hashable, Codable {
     var fmt: VisualFormat { format ?? VisualFormat() }
 
     /// Charts whose axis can hold a hierarchy of fields.
-    var supportsHierarchy: Bool { type.isCartesian || type.isPie || type == .combo }
+    var supportsHierarchy: Bool { type.isCartesian || type.isPie || [.combo, .waterfall, .funnel].contains(type) }
     var level: Int { supportsHierarchy ? min(drillLevel ?? 0, max(axis.count - 1, 0)) : 0 }
     var axisField: FieldRef? { axis.isEmpty ? nil : axis[level] }
     var canDrillDown: Bool { supportsHierarchy && level < axis.count - 1 }

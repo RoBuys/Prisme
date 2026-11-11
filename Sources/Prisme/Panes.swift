@@ -87,7 +87,10 @@ struct VisualizationsPane: View {
     @ViewBuilder
     private func wells(_ v: Visual) -> some View {
         switch v.type {
-        case .column, .bar, .line, .area:
+        case .waterfall, .funnel:
+            axisWell(L("Catégorie"), v, multi: true)
+            valuesWell(L("Valeurs"), v, multi: false)
+        case .column, .bar, .line, .area, .stackedColumn, .stackedBar, .percentColumn:
             axisWell(L("Axe"), v, multi: true)
             legendWell(v)
             valuesWell(L("Valeurs"), v, multi: true)
@@ -339,6 +342,50 @@ struct VisualizationsPane: View {
         }
         if v.type == .table {
             Text(L("Cliquez sur un en-tête de colonne pour trier.")).font(.system(size: 10)).foregroundStyle(.tertiary)
+        }
+        if v.type == .column || v.type == .bar {
+            toggle(L("Couleur selon la valeur"), v, \.colorByValue)
+            if f.colorByValue {
+                HStack {
+                    ColorPicker(L("Min"), selection: Binding(get: { Color(hexString: f.lowColor) ?? .white },
+                                                            set: { c in state.mutateFormat(v.id) { $0.lowColor = c.hexString } }),
+                                supportsOpacity: false)
+                    ColorPicker(L("Max"), selection: Binding(get: { Color(hexString: f.highColor) ?? .green },
+                                                            set: { c in state.mutateFormat(v.id) { $0.highColor = c.hexString } }),
+                                supportsOpacity: false)
+                }
+                .font(.system(size: 11))
+            }
+        }
+        if v.type == .table || v.type == .matrix {
+            Text(L("Mise en forme conditionnelle")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                .padding(.top, 4)
+            ForEach(v.type == .matrix ? Array(v.values.prefix(1)) : v.values) { vf in
+                let rule = f.conditional[vf.id.uuidString] ?? ConditionalRule()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(vf.displayName).font(.system(size: 11)).lineLimit(1)
+                    Picker("", selection: Binding(get: { rule.kind }, set: { k in
+                        state.mutateFormat(v.id) { var r = $0.conditional[vf.id.uuidString] ?? ConditionalRule(); r.kind = k; $0.conditional[vf.id.uuidString] = r }
+                    })) {
+                        ForEach(ConditionalRule.Kind.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    if rule.kind == .colorScale || rule.kind == .dataBars {
+                        HStack {
+                            if rule.kind == .colorScale {
+                                ColorPicker(L("Min"), selection: Binding(get: { Color(hexString: rule.low) ?? .white }, set: { c in
+                                    state.mutateFormat(v.id) { $0.conditional[vf.id.uuidString]?.low = c.hexString }
+                                }), supportsOpacity: false)
+                            }
+                            ColorPicker(rule.kind == .colorScale ? L("Max") : L("Couleur"), selection: Binding(
+                                get: { Color(hexString: rule.high) ?? .green },
+                                set: { c in state.mutateFormat(v.id) { $0.conditional[vf.id.uuidString]?.high = c.hexString } }),
+                                supportsOpacity: false)
+                        }
+                    }
+                }
+                .font(.system(size: 11))
+            }
         }
     }
 

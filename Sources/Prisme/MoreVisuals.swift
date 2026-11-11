@@ -325,3 +325,97 @@ struct MapVisualView: View {
         }
     }
 }
+
+// MARK: - Waterfall
+
+/// Running total: each category adds (green) or removes (red) from the previous total, ending with a total bar.
+struct WaterfallView: View {
+    let data: ChartData
+    let format: VisualFormat
+    let selected: String?
+    let onSelect: (String?) -> Void
+
+    private struct Step: Identifiable {
+        let id: String
+        let start: Double
+        let end: Double
+        let isTotal: Bool
+    }
+
+    var body: some View {
+        if let m = data.message {
+            PlaceholderView(message: m, symbol: VisualType.waterfall.symbol)
+        } else {
+            let series = data.series.first
+            var running = 0.0
+            let steps: [Step] = data.categories.compactMap { c in
+                guard let v = data.points.first(where: { $0.category == c && $0.series == series })?.value else { return nil }
+                defer { running += v }
+                return Step(id: c, start: running, end: running + v, isTotal: false)
+            } + [Step(id: L("Total"), start: 0, end: running, isTotal: true)]
+            Chart(steps) { s in
+                BarMark(x: .value("c", s.id), yStart: .value("a", s.start), yEnd: .value("b", s.end))
+                    .foregroundStyle(s.isTotal ? Theme.palette[0] : (s.end >= s.start ? Color(hex: 0x2BA37A) : Color(hex: 0xD9534F)))
+                    .opacity(selected == nil || selected == s.id || s.isTotal ? 1 : 0.35)
+                    .annotation(position: .top, spacing: 2) {
+                        if format.dataLabels {
+                            Text(Fmt.measure(s.end - s.start, data.format, compact: true)).font(.system(size: 8)).foregroundStyle(.secondary)
+                        }
+                    }
+            }
+            .chartXScale(domain: steps.map(\.id))
+            .chartYAxis { AxisMarks(position: .leading) { v in
+                if format.gridlines { AxisGridLine() }
+                AxisValueLabel { if let d = v.as(Double.self) { Text(Fmt.measure(d, .auto, compact: true)) } }
+            } }
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle().fill(.clear).contentShape(Rectangle()).onTapGesture { loc in
+                        guard let pf = proxy.plotFrame else { return }
+                        let c: String? = proxy.value(atX: loc.x - geo[pf].minX, as: String.self)
+                        onSelect(c == L("Total") ? nil : c)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Funnel
+
+struct FunnelView: View {
+    let data: ChartData
+    let format: VisualFormat
+    let selected: String?
+    let onSelect: (String?) -> Void
+
+    var body: some View {
+        if let m = data.message {
+            PlaceholderView(message: m, symbol: VisualType.funnel.symbol)
+        } else {
+            let series = data.series.first
+            let pts = data.categories.compactMap { c in data.points.first { $0.category == c && $0.series == series } }
+            let top = pts.first?.value ?? 1
+            let color = Theme.colors(1, first: format.color)[0]
+            Chart(pts) { p in
+                BarMark(xStart: .value("a", -p.value / 2), xEnd: .value("b", p.value / 2), y: .value("c", p.category))
+                    .foregroundStyle(color.opacity(selected == nil || selected == p.category ? 0.85 : 0.25))
+                    .annotation(position: .overlay) {
+                        Text(Fmt.measure(p.value, data.format, compact: true) + (format.dataLabels && top > 0
+                             ? " · " + (p.value / top).formatted(.percent.precision(.fractionLength(0))) : ""))
+                            .font(.system(size: 9, weight: .semibold)).foregroundStyle(.white)
+                    }
+            }
+            .chartYScale(domain: pts.map(\.category))
+            .chartXAxis(.hidden)
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle().fill(.clear).contentShape(Rectangle()).onTapGesture { loc in
+                        guard let pf = proxy.plotFrame else { return }
+                        onSelect(proxy.value(atY: loc.y - geo[pf].minY, as: String.self))
+                    }
+                }
+            }
+        }
+    }
+}
