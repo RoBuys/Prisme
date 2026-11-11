@@ -66,6 +66,13 @@ struct PrismeApp: App {
             CommandGroup(replacing: .saveItem) {
                 Button(L("Enregistrer")) { state.save() }.keyboardShortcut("s")
                 Button(L("Enregistrer sous…")) { state.saveAs() }.keyboardShortcut("s", modifiers: [.command, .shift])
+                Divider()
+                Menu(L("Exporter")) {
+                    Button(L("Toutes les pages en PDF…")) { state.exportPDF() }.keyboardShortcut("p", modifiers: [.command, .shift])
+                    Button(L("Page affichée en image (PNG)…")) { state.exportPNG() }
+                    Button(L("Données du visuel (CSV)…")) { if let id = state.selectedVisualID { state.exportCSV(id) } }
+                        .disabled(state.selectedVisualID == nil)
+                }
             }
             CommandMenu(L("Visuel")) {
                 Menu(L("Nouveau visuel")) {

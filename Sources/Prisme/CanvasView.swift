@@ -119,6 +119,7 @@ struct VisualContainer: View {
             .contextMenu {
                 Button(L("Dupliquer")) { state.duplicateVisual(visual.id) }
                 Button(L("Mettre au premier plan")) { state.bringToFront(visual.id) }
+                Button(L("Exporter les données (CSV)…")) { state.exportCSV(visual.id) }
                 Divider()
                 Button(L("Supprimer"), role: .destructive) { state.deleteVisual(visual.id) }
             }
@@ -128,6 +129,7 @@ struct VisualContainer: View {
         Menu {
             Button(L("Dupliquer")) { state.duplicateVisual(visual.id) }
             Button(L("Mettre au premier plan")) { state.bringToFront(visual.id) }
+            Button(L("Exporter les données (CSV)…")) { state.exportCSV(visual.id) }
             Divider()
             Button(L("Supprimer"), role: .destructive) { state.deleteVisual(visual.id) }
         } label: {

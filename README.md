@@ -32,6 +32,8 @@ import data, then build interactive reports with drag and drop. The interface is
 - **Hover tooltips** on charts, optional **data labels**, and per-visual **formatting**: legend, gridlines, axis
   titles, main color, value format, sorting, **Top N**; click a table header to sort. Five report **themes**
   (select no visual to see the theme picker).
+- **Export**: all pages as a PDF, the current page as a PNG image, a visual's data as CSV (`;` and decimal commas
+  in French, `,` in English).
 - **Saving** reports (data included) as `.prisme` files.
 - **Power BI reports shared with you** (**Power BI** view, cloud icon): sign in with your Microsoft work account,
   browse My workspace and shared reports, workspaces and apps, and display reports interactively (embedded with the

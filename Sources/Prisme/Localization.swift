@@ -362,6 +362,18 @@ enum Strings {
         "Crépuscule": "Sunset",
         "Monochrome": "Monochrome",
 
+        // Export
+        "Exporter": "Export",
+        "PDF": "PDF",
+        "Image": "Image",
+        "Exporter les données (CSV)…": "Export Data (CSV)…",
+        "Toutes les pages en PDF…": "All Pages as PDF…",
+        "Page affichée en image (PNG)…": "Current Page as Image (PNG)…",
+        "Données du visuel (CSV)…": "Visual Data (CSV)…",
+        "Impossible de créer le fichier PDF.": "Couldn't create the PDF file.",
+        "Impossible de créer l'image.": "Couldn't create the image.",
+        "Ce visuel n'a pas de données à exporter.": "This visual has no data to export.",
+
         // Settings
         "Langue": "Language",
         "Langue de l'interface": "Interface language",

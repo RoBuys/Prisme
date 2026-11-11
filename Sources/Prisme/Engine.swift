@@ -128,6 +128,8 @@ struct TableData {
     var headers: [String] = []
     var numeric: [Bool] = []
     var rows: [[String]] = []
+    /// Same cells as `rows`, with unformatted numbers (for CSV export).
+    var raw: [[String]] = []
     var rowKeys: [String] = []
     var totals: [String]?
     var message: String?
@@ -533,6 +535,7 @@ enum Engine {
         let override = v.fmt.valueFormat
         for c in computed.prefix(limit) {
             data.rows.append(c.key.map(\.label) + zip(vals, c.values).map { format($0.1, $0.0.0, m, override: override) })
+            data.raw.append(c.key.map(\.label) + c.values.map { $0.map(Fmt.plain) ?? "" })
             data.rowKeys.append(c.key.first?.label ?? "")
         }
         if !axes.isEmpty && !vals.isEmpty {

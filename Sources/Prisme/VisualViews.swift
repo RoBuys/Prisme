@@ -353,7 +353,7 @@ struct TableVisualView: View {
             PlaceholderView(message: m, symbol: "tablecells")
         } else {
             let widths = columnWidths()
-            ScrollView([.vertical, .horizontal]) {
+            MaybeScroll(axes: [.vertical, .horizontal]) {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders, .sectionFooters]) {
                     Section {
                         ForEach(data.rows.indices, id: \.self) { i in
@@ -435,6 +435,7 @@ struct TableVisualView: View {
 struct SlicerView: View {
     let visual: Visual
     @Environment(AppState.self) private var state
+    @Environment(\.isExporting) private var exporting
     @State private var search = ""
 
     var body: some View {
@@ -442,7 +443,7 @@ struct SlicerView: View {
             let all = Engine.distinctValues(f, state.tables)
             let values = search.isEmpty ? all : all.filter { $0.localizedCaseInsensitiveContains(search) }
             VStack(alignment: .leading, spacing: 4) {
-                if all.count > 8 {
+                if all.count > 8 && !exporting {
                     HStack(spacing: 4) {
                         Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(.secondary)
                         TextField(L("Rechercher"), text: $search).textFieldStyle(.plain).font(.system(size: 11))
@@ -450,7 +451,7 @@ struct SlicerView: View {
                     .padding(4)
                     .background(RoundedRectangle(cornerRadius: 4).stroke(Color.black.opacity(0.12)))
                 }
-                ScrollView {
+                MaybeScroll(axes: .vertical) {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         item(L("Tout sélectionner"), checked: visual.slicerSelection.isEmpty) {
                             state.clearSlicer(visual.id)

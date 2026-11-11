@@ -162,6 +162,12 @@ struct RibbonView: View {
                 RibbonButton(L("Nouvelle page"), "doc.badge.plus") { state.mode = .report; state.addPage() }
             }
             RibbonDivider()
+            RibbonGroup(L("Exporter")) {
+                RibbonButton(L("PDF"), "doc.richtext") { state.exportPDF() }
+                RibbonButton(L("Image"), "photo") { state.exportPNG() }
+            }
+            .disabled(state.mode != .report)
+            RibbonDivider()
             RibbonGroup(L("Visuel")) {
                 RibbonButton(L("Dupliquer"), "plus.square.on.square") { state.duplicateVisual() }
                     .disabled(state.selectedVisualID == nil)
