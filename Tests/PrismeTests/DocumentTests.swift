@@ -99,14 +99,14 @@ extension PrismeTests {
             #expect(st.relationships.map(\.label) == ["Ventes[Région] → Régions[Région]"])
             #expect(st.pages.map(\.name) == ["Synthèse", "Vide"])
             let visuals = st.pages[0].visuals
-            #expect(visuals.map(\.type) == [.column, .card, .line, .slicer, .table])
+            #expect(visuals.map(\.type) == [.column, .card, .line, .slicer, .table, .text])
             #expect(visuals[0].title == "Ventes par région")
             #expect(visuals[0].frame == CGRect(x: 0, y: 0, width: 640, height: 360))   // 1600×900 scaled to 1280×720
             #expect(visuals[2].axis.first?.dateLevel == .year)
             #expect(Engine.cardValue(visuals[1], st.model, [])?.value.filter(\.isNumber) == "80000")
             let table = Engine.tableData(visuals[4], st.model, [])
             #expect(table.raw.map { $0[2] } == ["0.375", "0.625"])
-            #expect(st.alertMessage?.contains("textbox") == true)
+            #expect(st.alertMessage?.contains("textbox") == false)   // text boxes are imported
             #expect(st.alertMessage?.contains("Bizarre") == true)
         }
 
@@ -130,7 +130,7 @@ extension PrismeTests {
             #expect(Set(st.tables.map(\.name)) == ["Ventes", "Régions"])
             #expect(st.tables.allSatisfy { $0.rows.isEmpty })
             #expect(Set(st.measures.map(\.name)) == ["CA", "Part"])
-            #expect(st.pages[0].visuals.count == 5)
+            #expect(st.pages[0].visuals.count == 6)
         }
 
         @Test func tmdlNames() {

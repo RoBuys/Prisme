@@ -84,7 +84,10 @@ import data, then build interactive reports with drag and drop. The interface is
   dictionaries, Huffman-compressed strings, RLE and bit-packed segments, value-encoded columns) are decoded, so the
   report works without access to the original sources (snapshot of the last refresh). Calculated tables are
   computed (`GENERATESERIES`, `CALENDAR`, `CALENDARAUTO` and the table functions above). An import summary lists what couldn't be
-  converted (unsupported visuals or DAX, calculated tables, bidirectional relationships).
+  converted (unsupported visuals or DAX, calculated tables, bidirectional relationships), grouped by cause and
+  naming the connector of sources Prisme can't reach (Dataverse, SQL Server, SharePoint…). Older templates whose
+  queries live in the `DataMashup` package are read too; Power Query parameters are filled in (and substituted in
+  file paths), helper queries are followed to the actual source, and text boxes, shapes and buttons are imported.
 - **Page elements**: text boxes (with `{Measure}` placeholders showing live values), images, shapes and buttons
   (⌘-click to go to a page, apply a bookmark, go back after a drillthrough or open a link).
 - **Saving** reports (data included) as `.prisme` files.

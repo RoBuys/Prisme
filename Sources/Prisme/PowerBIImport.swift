@@ -23,6 +23,8 @@ struct PBIVisualSpec {
     var frame: CGRect
     var title: String?
     var roles: [String: [PBIField]] = [:]
+    /// Text boxes, shapes and buttons.
+    var element: ElementContent?
 }
 
 struct PBIPageSpec {
@@ -44,6 +46,8 @@ struct PBITableSpec {
     var columns: [PBIColumnSpec] = []
     var measures: [(name: String, expression: String, format: String?)] = []
     var mExpression: String?
+    /// Older files: the partition names a query of the DataMashup package instead of holding its M.
+    var queryName: String?
     var calculated = false
     /// DAX expression of a calculated table.
     var calcExpression: String?
@@ -64,6 +68,8 @@ struct PBIProject {
     var fromPBIXModel = false
     /// Column values decoded from the .pbix VertiPaq storage, keyed by table then column.
     var storedData: [String: [String: [CellValue]]] = [:]
+    /// Shared Power Query queries and parameters (DataMashup or model expressions), by name.
+    var queries: [String: String] = [:]
     var folder: URL
 }
 
@@ -87,6 +93,13 @@ enum PowerBIImporter {
         if let schema = try? Data(contentsOf: dir.appendingPathComponent("DataModelSchema")),
            let json = jsonObject(schema) as? [String: Any] {
             (p.tables, p.relationships) = parseTMSL(json)
+            p.queries = sharedExpressions(json)
+            if let mashup = try? Data(contentsOf: dir.appendingPathComponent("DataMashup")) {
+                p.queries.merge(mashupQueries(mashup)) { a, _ in a }
+            }
+            for i in p.tables.indices where p.tables[i].mExpression == nil && !p.tables[i].calculated {
+                p.tables[i].mExpression = p.queries[p.tables[i].queryName ?? p.tables[i].name]
+            }
         } else if let dm = try? Data(contentsOf: dir.appendingPathComponent("DataModel")),
                   let model = try? PBIXDataModel.model(dm) {
             (p.tables, p.relationships) = model
@@ -124,6 +137,7 @@ enum PowerBIImporter {
         var p = PBIProject(folder: folder)
         if let bim = try? Data(contentsOf: modelDir.appendingPathComponent("model.bim")), let json = jsonObject(bim) as? [String: Any] {
             (p.tables, p.relationships) = parseTMSL(json)
+            p.queries = sharedExpressions(json)
         } else if FileManager.default.fileExists(atPath: modelDir.appendingPathComponent("definition").path) {
             (p.tables, p.relationships) = parseTMDL(modelDir.appendingPathComponent("definition"))
         } else {
@@ -184,6 +198,112 @@ enum PowerBIImporter {
         name.hasPrefix("LocalDateTable_") || name.hasPrefix("DateTableTemplate_")
     }
 
+    /// Shared M expressions of a TMSL model (parameters and helper queries).
+    static func sharedExpressions(_ root: [String: Any]) -> [String: String] {
+        let model = root["model"] as? [String: Any] ?? root
+        var out: [String: String] = [:]
+        for e in model["expressions"] as? [[String: Any]] ?? [] {
+            if let n = e["name"] as? String, let x = text(e["expression"]) { out[n] = x }
+        }
+        return out
+    }
+
+    /// Queries of a DataMashup stream: [version][package size][OPC zip holding Formulas/Section1.m]…
+    static func mashupQueries(_ data: Data) -> [String: String] {
+        guard data.count > 8 else { return [:] }
+        let b = [UInt8](data.prefix(8))
+        let size = Int(b[4]) | Int(b[5]) << 8 | Int(b[6]) << 16 | Int(b[7]) << 24
+        guard size > 0, 8 + size <= data.count else { return [:] }
+        let zip = FileManager.default.temporaryDirectory.appendingPathComponent("prisme-mashup-\(UUID().uuidString).zip")
+        defer { try? FileManager.default.removeItem(at: zip) }
+        guard (try? data.subdata(in: 8..<8 + size).write(to: zip)) != nil, let dir = try? unzip(zip) else { return [:] }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        guard let section = try? String(contentsOf: dir.appendingPathComponent("Formulas/Section1.m"), encoding: .utf8) else { return [:] }
+        return sectionMembers(section)
+    }
+
+    /// `shared Name = expression;` members of an M section document.
+    static func sectionMembers(_ doc: String) -> [String: String] {
+        var out: [String: String] = [:]
+        let c = Array(doc)
+        var i = 0
+        func skipTrivia() {
+            while i < c.count {
+                if c[i].isWhitespace { i += 1 }
+                else if c[i] == "/", i + 1 < c.count, c[i + 1] == "/" { while i < c.count, c[i] != "\n" { i += 1 } }
+                else if c[i] == "/", i + 1 < c.count, c[i + 1] == "*" {
+                    i += 2
+                    while i + 1 < c.count, !(c[i] == "*" && c[i + 1] == "/") { i += 1 }
+                    i += 2
+                } else { break }
+            }
+        }
+        func word(_ w: String) -> Bool {
+            let a = Array(w)
+            guard i + a.count <= c.count, Array(c[i..<i + a.count]) == a else { return false }
+            return i + a.count == c.count || !(c[i + a.count].isLetter || c[i + a.count].isNumber || c[i + a.count] == "_")
+        }
+        while i < c.count {
+            skipTrivia()
+            guard i < c.count else { break }
+            if c[i] == "[" {   // attributes: [ Description = "…" ]
+                var depth = 0, inString = false
+                while i < c.count {
+                    if inString { if c[i] == "\"" { inString = false } }
+                    else if c[i] == "\"" { inString = true }
+                    else if c[i] == "[" { depth += 1 }
+                    else if c[i] == "]" { depth -= 1; if depth == 0 { i += 1; break } }
+                    i += 1
+                }
+                continue
+            }
+            guard word("shared") else {
+                while i < c.count, c[i] != ";" { i += 1 }   // section header or unknown statement
+                i += 1
+                continue
+            }
+            i += 6
+            skipTrivia()
+            var name = ""
+            if c[i] == "#", i + 1 < c.count, c[i + 1] == "\"" {
+                i += 2
+                while i < c.count {
+                    if c[i] == "\"" { if i + 1 < c.count, c[i + 1] == "\"" { name.append("\""); i += 2; continue }; i += 1; break }
+                    name.append(c[i]); i += 1
+                }
+            } else {
+                while i < c.count, c[i].isLetter || c[i].isNumber || c[i] == "_" || c[i] == "." { name.append(c[i]); i += 1 }
+            }
+            skipTrivia()
+            guard i < c.count, c[i] == "=" else { continue }
+            i += 1
+            let start = i
+            var depth = 0, inString = false, quotedName = false
+            while i < c.count {
+                let ch = c[i]
+                if inString || quotedName {
+                    if ch == "\"" {
+                        if i + 1 < c.count, c[i + 1] == "\"" { i += 2; continue }
+                        inString = false; quotedName = false
+                    }
+                } else if ch == "\"" { inString = true
+                } else if ch == "#", i + 1 < c.count, c[i + 1] == "\"" { quotedName = true; i += 1
+                } else if ch == "/", i + 1 < c.count, c[i + 1] == "/" { while i < c.count, c[i] != "\n" { i += 1 }; continue
+                } else if ch == "/", i + 1 < c.count, c[i + 1] == "*" {
+                    i += 2
+                    while i + 1 < c.count, !(c[i] == "*" && c[i + 1] == "/") { i += 1 }
+                    i += 2; continue
+                } else if "([{".contains(ch) { depth += 1
+                } else if ")]}".contains(ch) { depth -= 1
+                } else if ch == ";" && depth == 0 { break }
+                i += 1
+            }
+            out[name] = String(c[start..<min(i, c.count)]).trimmingCharacters(in: .whitespacesAndNewlines)
+            i += 1
+        }
+        return out
+    }
+
     static func parseTMSL(_ root: [String: Any]) -> ([PBITableSpec], [PBIRelSpec]) {
         let model = root["model"] as? [String: Any] ?? root
         var tables: [PBITableSpec] = []
@@ -204,7 +324,13 @@ enum PowerBIImporter {
             }
             if let part = (t["partitions"] as? [[String: Any]])?.first, let src = part["source"] as? [String: Any] {
                 if (src["type"] as? String) == "calculated" { spec.calculated = true; spec.calcExpression = text(src["expression"]) }
-                else { spec.mExpression = text(src["expression"]) }
+                else if (src["type"] as? String) == "query" {
+                    // "SELECT * FROM [Query name]"
+                    let q = src["query"] as? String ?? ""
+                    if let a = q.firstIndex(of: "["), let b = q.lastIndex(of: "]"), a < b {
+                        spec.queryName = String(q[q.index(after: a)..<b]).replacingOccurrences(of: "]]", with: "]")
+                    }
+                } else { spec.mExpression = text(src["expression"]) }
             }
             tables.append(spec)
         }
@@ -460,6 +586,70 @@ enum PowerBIImporter {
         return literal(props["text"])
     }
 
+    /// Hex color of a `{"solid": {"color": {"expr": {"Literal": …}}}}` property (theme colors are skipped).
+    private static func color(_ v: Any?) -> String? {
+        guard let c = ((v as? [String: Any])?["solid"] as? [String: Any])?["color"],
+              let s = literal(c), s.hasPrefix("#") else { return nil }
+        return String(s.dropFirst()).uppercased()
+    }
+
+    private static func props(_ objects: [String: Any], _ key: String) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for o in objects[key] as? [[String: Any]] ?? [] {
+            // Keep the default selector's properties (not hover / pressed states).
+            if let sel = o["selector"] as? [String: Any], let id = sel["id"] as? String, id != "default" { continue }
+            out.merge(o["properties"] as? [String: Any] ?? [:]) { a, _ in a }
+        }
+        return out
+    }
+
+    /// Settings of a text box, shape or button.
+    static func element(_ type: String, _ objects: [String: Any]) -> ElementContent? {
+        switch type {
+        case "textbox":
+            var c = ElementContent.defaults(for: .text)
+            let paragraphs = props(objects, "general")["paragraphs"] as? [[String: Any]] ?? []
+            c.text = paragraphs.map { p in
+                (p["textRuns"] as? [[String: Any]] ?? []).compactMap { $0["value"] as? String }.joined()
+            }.joined(separator: "\n")
+            if let style = (paragraphs.first?["textRuns"] as? [[String: Any]])?.first?["textStyle"] as? [String: Any] {
+                if let size = (style["fontSize"] as? String).flatMap({ Double($0.replacingOccurrences(of: "px", with: "").replacingOccurrences(of: "pt", with: "")) }) {
+                    c.fontSize = size
+                }
+                if let col = style["color"] as? String, col.hasPrefix("#") { c.textColor = String(col.dropFirst()).uppercased() }
+                c.bold = (style["fontWeight"] as? String) == "bold" || (style["fontFamily"] as? String)?.contains("Bold") == true
+                c.italic = (style["fontStyle"] as? String) == "italic"
+            }
+            if let a = paragraphs.first?["horizontalTextAlignment"] as? String {
+                c.alignment = a == "center" ? "center" : a == "right" ? "trailing" : "leading"
+            }
+            return c
+        case "basicShape", "shape":
+            var c = ElementContent.defaults(for: .shape)
+            let general = props(objects, "general"), fill = props(objects, "fill"), line = props(objects, "line")
+            let kind = (literal(general["shapeType"]) ?? literal(props(objects, "shape")["tileShape"]) ?? "").lowercased()
+            c.shape = kind.contains("oval") || kind.contains("ellipse") ? .ellipse
+                : kind.contains("round") ? .rounded : kind.contains("line") ? .line : kind.contains("arrow") ? .arrow : .rectangle
+            if literal(fill["show"]) == "false" { c.fill = nil } else if let f = color(fill["fillColor"]) { c.fill = f }
+            if let l = color(line["lineColor"]) { c.stroke = l }
+            if let w = literal(line["weight"]).flatMap({ Double($0.trimmingCharacters(in: CharacterSet(charactersIn: "DL"))) }) {
+                c.strokeWidth = w
+                if w == 0 { c.stroke = nil }
+            }
+            return c
+        case "actionButton":
+            var c = ElementContent.defaults(for: .button)
+            let text = props(objects, "text"), fill = props(objects, "fill")
+            if literal(text["show"]) == "true", let t = literal(text["text"]) { c.text = t } else { c.text = "" }
+            if let col = color(text["fontColor"]) { c.textColor = col }
+            if literal(fill["show"]) == "false" { c.fill = nil } else if let f = color(fill["fillColor"]) { c.fill = f }
+            if c.fill == nil && c.text.isEmpty { c.stroke = "C8CED8" }
+            return c
+        default:
+            return nil
+        }
+    }
+
     static func parseLayout(_ json: [String: Any]) -> [PBIPageSpec] {
         let sections = (json["sections"] as? [[String: Any]] ?? []).sorted { ($0["ordinal"] as? Int ?? 0) < ($1["ordinal"] as? Int ?? 0) }
         return sections.map { s in
@@ -472,6 +662,7 @@ enum PowerBIImporter {
                 let frame = CGRect(x: vc["x"] as? Double ?? 0, y: vc["y"] as? Double ?? 0,
                                    width: vc["width"] as? Double ?? 300, height: vc["height"] as? Double ?? 200)
                 var spec = PBIVisualSpec(type: type, frame: frame, title: title(sv["vcObjects"]))
+                spec.element = element(type, sv["objects"] as? [String: Any] ?? [:])
                 let query = sv["prototypeQuery"] as? [String: Any] ?? [:]
                 var aliases: [String: String] = [:]
                 for f in query["From"] as? [[String: Any]] ?? [] {
@@ -515,6 +706,7 @@ enum PowerBIImporter {
                 let frame = CGRect(x: pos["x"] as? Double ?? 0, y: pos["y"] as? Double ?? 0,
                                    width: pos["width"] as? Double ?? 300, height: pos["height"] as? Double ?? 200)
                 var spec = PBIVisualSpec(type: type, frame: frame, title: title(visual["visualContainerObjects"]))
+                spec.element = element(type, visual["objects"] as? [String: Any] ?? [:])
                 let state = (visual["query"] as? [String: Any])?["queryState"] as? [String: Any] ?? [:]
                 for (role, value) in state {
                     let projections = (value as? [String: Any])?["projections"] as? [[String: Any]] ?? []
@@ -656,6 +848,95 @@ enum MSource {
         return nil
     }
 
+    // MARK: Queries and parameters
+
+    static func isParameter(_ m: String) -> Bool { m.contains("IsParameterQuery=true") || m.contains("IsParameterQuery = true") }
+
+    /// Value of a parameter query: `"value" meta [IsParameterQuery=true, …]`, or its DefaultValue.
+    static func parameterValue(_ m: String) -> String? {
+        guard isParameter(m) else { return nil }
+        let head = m.components(separatedBy: " meta ").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if head.hasPrefix("\""), let v = strings(head).first { return v }
+        if let d = Double(head) { return Fmt.plain(d) }
+        return navigation(m, "DefaultValue")
+    }
+
+    /// Parameters that have a value, by name.
+    static func parameters(_ queries: [String: String]) -> [String: String] {
+        queries.compactMapValues(parameterValue)
+    }
+
+    /// Whether `m` refers to the query `name` (`#"name"` or a bare identifier).
+    private static func references(_ m: String, _ name: String) -> Range<String.Index>? {
+        if let r = m.range(of: "#\"" + name.replacingOccurrences(of: "\"", with: "\"\"") + "\"") { return r }
+        guard name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "." }), name.first?.isLetter == true else { return nil }
+        let pattern = "(?<![\\w.\"#])" + NSRegularExpression.escapedPattern(for: name) + "(?![\\w\"])"
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let match = re.firstMatch(in: m, range: NSRange(m.startIndex..., in: m)) else { return nil }
+        return Range(match.range, in: m)
+    }
+
+    /// Replaces parameter references by their values (as M text literals).
+    static func substitute(_ m: String, params: [String: String]) -> String {
+        var out = m
+        for (name, value) in params {
+            let literal = "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+            while let r = references(out, name) { out.replaceSubrange(r, with: literal) }
+        }
+        // Fold "a" & "b" into "ab" (a folder parameter joined to a file name).
+        if out.contains("&"), let re = try? NSRegularExpression(pattern: #""((?:[^"]|"")*)"\s*&\s*"((?:[^"]|"")*)""#) {
+            while let match = re.firstMatch(in: out, range: NSRange(out.startIndex..., in: out)),
+                  let r = Range(match.range, in: out), let a = Range(match.range(at: 1), in: out), let b = Range(match.range(at: 2), in: out) {
+                out.replaceSubrange(r, with: "\"" + out[a] + out[b] + "\"")
+            }
+        }
+        return out
+    }
+
+    /// The query that loads the data: `m` itself when its source is recognized, otherwise the first referenced
+    /// helper query that has one (Power Query transformations aren't replayed anyway).
+    static func effective(_ m: String, queries: [String: String], params: [String: String], depth: Int = 0) -> String {
+        let s = substitute(m, params: params)
+        if source(s) != nil || embeddedTable(s) != nil || depth > 6 { return s }
+        let referenced = queries.keys.compactMap { n -> (Range<String.Index>, String)? in
+            guard params[n] == nil, queries[n] != m, let r = references(s, n) else { return nil }
+            return (r, n)
+        }.sorted { $0.0.lowerBound < $1.0.lowerBound }
+        for (_, n) in referenced {
+            let e = effective(queries[n]!, queries: queries, params: params, depth: depth + 1)
+            if source(e) != nil || embeddedTable(e) != nil { return e }
+        }
+        return s
+    }
+
+    /// `m` followed by the queries it refers to (recursively), to name the connector it uses.
+    static func chain(_ m: String, queries: [String: String]) -> String {
+        var seen = Set<String>(), out = m, queue = [m]
+        while let q = queue.popLast(), seen.count < 20 {
+            for (n, e) in queries where !seen.contains(n) && references(q, n) != nil {
+                seen.insert(n); out += "\n" + e; queue.append(e)
+            }
+        }
+        return out
+    }
+
+    private static let connectors: [(String, String)] = [
+        ("Cds.Contents", "Dataverse (Cds.Contents)"), ("CommonDataService.Database", "Dataverse"),
+        ("Dynamics365BusinessCentral", "Business Central"), ("Dynamics365", "Dynamics 365"),
+        ("Sql.Database", "SQL Server (Sql.Database)"), ("Sql.Databases", "SQL Server"),
+        ("SharePoint.Files", "SharePoint"), ("SharePoint.Tables", "SharePoint"), ("SharePoint.Contents", "SharePoint"),
+        ("OData.Feed", "OData"), ("Salesforce.", "Salesforce"), ("AnalysisServices.", "Analysis Services"),
+        ("Oracle.Database", "Oracle"), ("Snowflake.", "Snowflake"), ("GoogleBigQuery.", "BigQuery"),
+        ("Databricks.", "Databricks"), ("AzureStorage.Tables", "Azure Tables"), ("Odbc.", "ODBC"), ("OleDb.", "OLE DB"),
+        ("Exchange.Contents", "Exchange"), ("ActiveDirectory.", "Active Directory"), ("PowerPlatform.Dataflows", "Dataflows"),
+        ("PowerBI.Dataflows", "Dataflows"), ("Folder.Files", "Folder (Folder.Files)"),
+    ]
+
+    /// Display name of the (unsupported) connector a query uses.
+    static func connector(_ m: String) -> String? {
+        connectors.first { m.contains($0.0) }?.1
+    }
+
     /// Recognizes common sources: CSV / Excel / JSON files, web JSON, PostgreSQL, MySQL.
     static func source(_ m: String) -> (DataSource, String?)? {
         if let path = argument(m, after: "File.Contents") {
@@ -757,6 +1038,8 @@ extension AppState {
             notes.append(L("Fichier .pbix : le modèle et les données ne sont pas lisibles. Les tables ont été recréées vides à partir des champs des visuels ; utilisez « Changer la source… » sur chaque table, et recréez les mesures."))
         }
 
+        var missingFiles: [String] = [], parameterTables: [String] = [], unsupported: [String: [String]] = [:]
+        let params = MSource.parameters(project.queries)
         if project.fromPBIXModel {
             notes.append(project.storedData.isEmpty
                 ? L("Fichier .pbix : le modèle (tables, mesures, relations) a été lu, mais pas les données stockées ; elles sont rechargées depuis les sources d'origine quand Prisme les trouve.")
@@ -793,7 +1076,16 @@ extension AppState {
             }
             let dataCols = spec.columns.filter { $0.expression == nil }
             var table = DataTable(name: spec.name, columns: dataCols.map { DataColumn(name: $0.name, type: Self.columnType($0.dataType)) }, rows: [])
-            if let stored = project.storedData[spec.name],
+            // Parameters resolved, helper queries followed to the actual source.
+            let mExpr = spec.mExpression.map { MSource.effective($0, queries: project.queries, params: params) }
+            if let value = params[spec.queryName ?? spec.name] ?? (spec.mExpression.flatMap(MSource.parameterValue)), !dataCols.isEmpty {
+                // Parameter query: a one-value table.
+                table.rows = [[Importer.coerce([.text(value)], to: table.columns[0].type)[0]]
+                              + Array(repeating: .empty, count: dataCols.count - 1)]
+                loadedCount += 1
+            } else if spec.mExpression != nil && MSource.isParameter(spec.mExpression!) {
+                parameterTables.append(spec.name)
+            } else if let stored = project.storedData[spec.name],
                let rows = Self.storedRows(stored, dataCols, table.columns.map(\.type)) {
                 // Data snapshot stored in the .pbix; the source is kept for a later refresh when it is reachable.
                 table.rows = rows
@@ -802,7 +1094,7 @@ extension AppState {
                     table.source = source
                 }
                 loadedCount += 1
-            } else if let m = spec.mExpression, var (source, path) = MSource.source(m) {
+            } else if let m = mExpr, var (source, path) = MSource.source(m) {
                 if let p = path {
                     if let found = locate(p, near: project.folder, ask: askForFiles) { source.path = found } else { path = nil; source.path = "" }
                 }
@@ -819,14 +1111,15 @@ extension AppState {
                         notes.append(L("« %@ » : %@", spec.name, error.localizedDescription))
                     }
                 } else {
-                    notes.append(L("« %@ » : fichier source introuvable, table vide.", spec.name))
+                    missingFiles.append(spec.name)
                 }
-            } else if let m = spec.mExpression, let grid = MSource.embeddedTable(m),
+            } else if let m = mExpr, let grid = MSource.embeddedTable(m),
                       let l = Importer.makeTable(name: spec.name, grid: grid, source: nil) {
                 table.rows = Self.align(l, to: dataCols, types: table.columns.map(\.type))
                 loadedCount += 1
             } else if project.hasModel {
-                notes.append(L("« %@ » : source non reconnue (seuls CSV, Excel, JSON, web, PostgreSQL et MySQL sont rechargés), table vide.", spec.name))
+                let connector = spec.mExpression.flatMap { MSource.connector(MSource.chain($0, queries: project.queries)) }
+                unsupported[connector ?? "", default: []].append(spec.name)
             }
             for c in spec.columns where c.expression != nil {
                 table.columns.append(DataColumn(name: c.name, type: Self.columnType(c.dataType), expression: c.expression))
@@ -847,12 +1140,27 @@ extension AppState {
             } } }
             if !seen.isEmpty { notes.append(L("%@ mesure(s) créées vides (BLANK()) : saisissez leur formule DAX.", seen.count)) }
         }
+        var bidirectional: [String] = []
         for r in project.relationships {
             guard let ft = Engine.table(named: r.fromTable, in: tables), ft.columnIndex(r.fromColumn) != nil,
                   let tt = Engine.table(named: r.toTable, in: tables), tt.columnIndex(r.toColumn) != nil else { continue }
             relationships.append(Relationship(fromTable: r.fromTable, fromColumn: r.fromColumn, toTable: r.toTable,
                                               toColumn: r.toColumn, isActive: r.active))
-            if r.bothDirections { notes.append(L("Relation %@ → %@ : le filtrage bidirectionnel n'est pas pris en charge (sens unique conservé).", r.fromTable, r.toTable)) }
+            if r.bothDirections { bidirectional.append("\(r.fromTable) → \(r.toTable)") }
+        }
+        let list: ([String]) -> String = { $0.map { "« \($0) »" }.joined(separator: ", ") }
+        for (connector, names) in unsupported.sorted(by: { $0.key < $1.key }) {
+            notes.append(connector.isEmpty
+                ? L("Source non reconnue (seuls CSV, Excel, JSON, web, PostgreSQL et MySQL sont rechargés), tables vides : %@.", list(names))
+                : L("Source %@ non prise en charge, tables vides : %@.", connector, list(names)))
+        }
+        if !unsupported.isEmpty && url.pathExtension.lowercased() == "pbit" {
+            notes.append(L("Un modèle .pbit ne contient pas de données : utilisez « Changer la source… » pour relier ces tables à un fichier."))
+        }
+        if !missingFiles.isEmpty { notes.append(L("Fichier source introuvable, tables vides : %@.", list(missingFiles))) }
+        if !parameterTables.isEmpty { notes.append(L("Paramètres sans valeur : %@.", list(parameterTables))) }
+        if !bidirectional.isEmpty {
+            notes.append(L("Filtrage bidirectionnel non pris en charge, sens unique conservé : %@.", bidirectional.joined(separator: ", ")))
         }
         for (name, expr) in calculatedTables { _ = fillCalculatedTable(name, expr) }
         recomputeCalculatedColumns()
@@ -1009,6 +1317,7 @@ extension AppState {
         "tableEx": .table, "table": .table, "pivotTable": .matrix, "slicer": .slicer, "advancedSlicerVisual": .slicer,
         "scatterChart": .scatter, "gauge": .gauge, "kpi": .kpi, "map": .map, "filledMap": .map, "azureMap": .map,
         "shapeMap": .map, "waterfallChart": .waterfall, "funnel": .funnel, "treemap": .donut, "ribbonChart": .stackedColumn,
+        "textbox": .text, "basicShape": .shape, "shape": .shape, "actionButton": .button,
     ]
 
     private func fieldRef(_ f: PBIField) -> FieldRef? {
@@ -1078,6 +1387,7 @@ extension AppState {
         if let t = s.title {
             if t.isEmpty { v.showTitle = false } else { v.title = t }
         }
+        if let e = s.element { v.content = e; v.showTitle = false }
         return v
     }
 
