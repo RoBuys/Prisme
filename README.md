@@ -45,6 +45,10 @@ import data, then build interactive reports with drag and drop. The interface is
   `RELATED`), comparison filters in `CALCULATE` (`Ventes[Montant] > 1000`), time intelligence (`TOTALYTD`,
   `TOTALQTD`, `TOTALMTD`, `DATESYTD`, `DATESQTD`, `DATESMTD`, `SAMEPERIODLASTYEAR`, `DATEADD`, `PREVIOUSMONTH`,
   `PREVIOUSYEAR`), text and date functions (`&`, `UPPER`, `LOWER`, `LEN`, `LEFT`, `RIGHT`, `YEAR`, `MONTH`, `DAY`).
+  Plus `VAR … RETURN`, `SWITCH`, `SELECTEDVALUE`, `HASONEVALUE`, `ISFILTERED`, `VALUES`, `RANKX`, `TOPN`,
+  `ALLEXCEPT`, `KEEPFILTERS`, `USERELATIONSHIP`, `LOOKUPVALUE`, `DATEDIFF`, `EOMONTH`, `DATE`, `TODAY`, `FORMAT`,
+  `CONCATENATE`, `INT`, `MOD`, `POWER`, `SQRT`, `VALUE`, and **quick measures** in the editor (year to date, previous
+  year, year-over-year %, running total, % of total, rank, average per category).
 - **Calculated columns** (**Nouvelle colonne** / New column): an expression evaluated for each row (row context,
   `RELATED`, measures with context transition), recomputed after each refresh.
 - **Hierarchies and drill**: put several fields on a chart's axis (or turn a date into Year › Quarter › Month › Day)
@@ -110,8 +114,7 @@ renewed automatically.
 ## Known limitations
 
 - No many-to-many relationships, no bidirectional filtering.
-- The measure language is a subset of DAX: no variables (`VAR`), no `SWITCH`, no calculated tables; `ALL` on a table
-  iterated by `SUMX` still respects other filters on that table's rows.
+- The measure language is a subset of DAX: no calculated tables, no table variables, no `SUMMARIZE` / `ADDCOLUMNS`.
 - Transformations cover common steps only (no custom M code, no fuzzy merge).
 
 ## Structure

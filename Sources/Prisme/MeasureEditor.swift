@@ -6,6 +6,10 @@ struct MeasureEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var draft: MeasureDraft
     @State private var error: String?
+    @State private var showQuick = false
+    @State private var quickMeasure = ""
+    @State private var quickDate = ""
+    @State private var quickCategory = ""
 
     private static var snippets: [(String, String, String)] { [
         ("SUM", L("SUM(Table[Colonne])"), L("Somme d'une colonne")),
@@ -28,6 +32,16 @@ struct MeasureEditor: View {
         ("DATEADD", L("CALCULATE([Mesure], DATEADD(Table[Date], -1, MONTH))"), L("Décale la période")),
         ("YEAR / MONTH", L("YEAR(Table[Date])"), L("Année d'une date (colonnes calculées)")),
         ("&", "\"a\" & \"b\"", L("Concatène du texte")),
+        ("VAR", L("VAR x = [Mesure]\nRETURN x * 2"), L("Variables")),
+        ("SWITCH", L("SWITCH(TRUE(), [Mesure] > 100, \"Haut\", \"Bas\")"), L("Choix entre plusieurs valeurs")),
+        ("RANKX", L("RANKX(ALL(Table[Colonne]), [Mesure])"), L("Rang dans une liste")),
+        ("TOPN", L("SUMX(TOPN(5, VALUES(Table[Colonne]), [Mesure]), [Mesure])"), L("Les N premiers")),
+        ("SELECTEDVALUE", L("SELECTEDVALUE(Table[Colonne], \"plusieurs\")"), L("Valeur unique sélectionnée")),
+        ("ALLEXCEPT", L("CALCULATE([Mesure], ALLEXCEPT(Table, Table[Colonne]))"), L("Ignore les filtres sauf certains")),
+        ("USERELATIONSHIP", L("CALCULATE([Mesure], USERELATIONSHIP(A[Col], B[Col]))"), L("Utilise une relation inactive")),
+        ("LOOKUPVALUE", L("LOOKUPVALUE(Table[Résultat], Table[Clé], \"valeur\")"), L("Recherche une valeur")),
+        ("DATEDIFF", L("DATEDIFF(DATE(2024, 1, 1), TODAY(), MONTH)"), L("Écart entre deux dates")),
+        ("FORMAT", L("FORMAT([Mesure], \"#,##0.00\")"), L("Met en forme un nombre ou une date")),
     ] }
 
     var body: some View {
@@ -47,6 +61,10 @@ struct MeasureEditor: View {
                     }
                     .frame(width: 210)
                 }
+            }
+            if !draft.isColumn {
+                DisclosureGroup(L("Mesures rapides"), isExpanded: $showQuick) { quickMeasures }
+                    .font(.system(size: 12))
             }
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -131,6 +149,73 @@ struct MeasureEditor: View {
             }
         }
         .controlSize(.small)
+    }
+
+    // MARK: Quick measures
+
+    private var dateColumns: [String] {
+        state.tables.flatMap { t in t.columns.filter { $0.type == .date }.map { reference(t.name, $0.name) } }
+    }
+
+    private var categoryColumns: [String] {
+        state.tables.flatMap { t in t.columns.filter { $0.type == .text }.map { reference(t.name, $0.name) } }
+    }
+
+    private var quickMeasures: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Picker(L("Mesure de base"), selection: $quickMeasure) {
+                    ForEach(state.measures.filter { $0.id != draft.id }) { Text($0.name).tag($0.name) }
+                }
+                Picker(L("Date"), selection: $quickDate) {
+                    ForEach(dateColumns, id: \.self) { Text($0).tag($0) }
+                }
+                Picker(L("Catégorie"), selection: $quickCategory) {
+                    ForEach(categoryColumns, id: \.self) { Text($0).tag($0) }
+                }
+            }
+            .controlSize(.small)
+            let m = quickMeasure
+            HStack(spacing: 6) {
+                quick(L("Cumul annuel"), L("%@ cumul annuel", m), "TOTALYTD([\(m)], \(quickDate))", needsDate: true)
+                quick(L("Année précédente"), L("%@ N-1", m), "CALCULATE([\(m)], SAMEPERIODLASTYEAR(\(quickDate)))", needsDate: true)
+                quick(L("Variation N-1 (%)"), L("%@ variation N-1", m),
+                      "VAR actuel = [\(m)]\nVAR precedent = CALCULATE([\(m)], SAMEPERIODLASTYEAR(\(quickDate)))\nRETURN DIVIDE(actuel - precedent, precedent)",
+                      needsDate: true, format: .percent)
+                quick(L("Cumul"), L("%@ cumulé", m), "CALCULATE([\(m)], \(quickDate) <= MAX(\(quickDate)))", needsDate: true)
+            }
+            HStack(spacing: 6) {
+                quick(L("% du total"), L("%@ % du total", m),
+                      "DIVIDE([\(m)], CALCULATE([\(m)], ALLSELECTED(\(baseTable(m)))))", format: .percent)
+                quick(L("Rang"), L("Rang de %@", m), "RANKX(ALL(\(quickCategory)), [\(m)])", needsCategory: true, format: .integer)
+                quick(L("Moyenne par catégorie"), L("Moyenne de %@ par catégorie", m), "AVERAGEX(VALUES(\(quickCategory)), [\(m)])",
+                      needsCategory: true)
+            }
+        }
+        .padding(.top, 4)
+        .onAppear {
+            if quickMeasure.isEmpty { quickMeasure = state.measures.first { $0.id != draft.id }?.name ?? "" }
+            if quickDate.isEmpty { quickDate = dateColumns.first ?? "" }
+            if quickCategory.isEmpty { quickCategory = categoryColumns.first ?? "" }
+        }
+    }
+
+    private func baseTable(_ measure: String) -> String {
+        let t = state.measures.first { $0.name == measure }?.table ?? draft.table
+        return t.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" } ? t : "'\(t)'"
+    }
+
+    private func quick(_ title: String, _ name: String, _ expression: String, needsDate: Bool = false,
+                       needsCategory: Bool = false, format: MeasureFormat? = nil) -> some View {
+        Button(title) {
+            draft.name = name
+            draft.expression = expression
+            if let format { draft.format = format }
+            else if let base = state.measures.first(where: { $0.name == quickMeasure }) { draft.format = base.format }
+            error = nil
+        }
+        .controlSize(.small)
+        .disabled(quickMeasure.isEmpty || (needsDate && quickDate.isEmpty) || (needsCategory && quickCategory.isEmpty))
     }
 
     private func reference(_ table: String, _ column: String) -> String {
