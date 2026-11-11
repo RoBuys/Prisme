@@ -98,6 +98,23 @@ struct DataGridView: View {
             .disabled(state.tables.count < 2)
             Button(L("Ajouter une colonne d'index…")) { step(.addIndex, t, text: "Index") }
             Divider()
+            Button(L("Fusionner des requêtes…")) {
+                let other = state.tables.first { $0.name != t.name }
+                var s = TransformStep(kind: .mergeTable, column: t.columns.first?.name ?? "", text: other?.name ?? "")
+                s.text2 = other?.columns.first { c in t.columns.contains { $0.name == c.name } }?.name ?? other?.columns.first?.name ?? ""
+                if let shared = other?.columns.first(where: { c in t.columns.contains { $0.name == c.name } }) { s.column = shared.name }
+                state.stepDraft = StepDraft(step: s, table: t.name)
+            }
+            .disabled(state.tables.count < 2)
+            Button(L("Regrouper par…")) {
+                var s = TransformStep(kind: .groupBy)
+                s.aggregations = [TransformStep.StepAggregation(name: "", aggregation: .count, column: "")]
+                state.stepDraft = StepDraft(step: s, table: t.name)
+            }
+            Button(L("Pivoter une colonne…")) { step(.pivotColumn, t) }
+            Button(L("Dépivoter des colonnes…")) { state.stepDraft = StepDraft(step: TransformStep(kind: .unpivotColumns), table: t.name) }
+            Button(L("Colonne conditionnelle…")) { step(.conditionalColumn, t, text: L("Personnalisée")) }
+            Divider()
             Button(L("Nouvelle colonne calculée…")) { state.newColumn(in: t.name) }
         } label: {
             Label(L("Transformer"), systemImage: "wand.and.rays")

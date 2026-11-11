@@ -17,7 +17,8 @@ import data, then build interactive reports with drag and drop. The interface is
 - **Automatic column typing** (number, text, date), editable in the **Données** (Data) view.
 - **Data transformations** (Power Query-like **applied steps**, in the Data view: **Transform** menu or a column
   header): rename, remove, change type, filter rows, replace values, split, trim, fill down, remove duplicates /
-  blank rows, keep first rows, append another table, add an index column. Steps are replayed on every refresh and
+  blank rows, keep first rows, append another table, add an index column, **merge queries** (left / inner join),
+  **group by** (several keys and aggregations), **pivot**, **unpivot** and **conditional columns**. Steps are replayed on every refresh and
   can be removed in any order; a failing step is flagged and skipped.
 - **16:9 report canvas** with multiple pages: visuals can be moved, resized and duplicated. The page scales to the
   window, text included.
@@ -107,7 +108,7 @@ renewed automatically.
 - No many-to-many relationships, no bidirectional filtering.
 - The measure language is a subset of DAX: no variables (`VAR`), no `SWITCH`, no calculated tables; `ALL` on a table
   iterated by `SUMX` still respects other filters on that table's rows.
-- Transformations cover common steps only (no merge/join, pivot/unpivot or custom M code).
+- Transformations cover common steps only (no custom M code, no fuzzy merge).
 
 ## Structure
 

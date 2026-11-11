@@ -6,6 +6,20 @@ struct TransformStep: Codable, Hashable, Identifiable {
     enum Kind: String, Codable, CaseIterable {
         case renameColumn, removeColumn, changeType, filterRows, replaceValues, splitColumn, trim, fillDown
         case removeDuplicates, removeBlankRows, keepTopRows, appendTable, addIndex
+        case mergeTable, groupBy, pivotColumn, unpivotColumns, conditionalColumn
+    }
+
+    enum JoinKind: String, Codable, CaseIterable {
+        case left, inner
+        var label: String { self == .left ? L("Externe gauche (toutes les lignes)") : L("Interne (lignes correspondantes)") }
+    }
+
+    /// One aggregated output column of a "group by" step (empty column = count rows).
+    struct StepAggregation: Codable, Hashable, Identifiable {
+        var id = UUID()
+        var name: String
+        var aggregation: Aggregation
+        var column: String
     }
 
     enum Op: String, Codable, CaseIterable {
@@ -39,6 +53,47 @@ struct TransformStep: Codable, Hashable, Identifiable {
     var op: Op = .equals
     var type: ColumnType = .text
     var count = 10
+    /// Several columns: group-by keys, columns to unpivot, or columns brought by a merge.
+    var columns: [String] = []
+    var aggregations: [StepAggregation] = []
+    var aggregation: Aggregation = .sum
+    var joinKind: JoinKind = .left
+    /// Conditional column: value when the condition holds (text3) or not (text4); "[Column]" uses a column's value.
+    var text3 = ""
+    var text4 = ""
+
+    init(kind: Kind, column: String = "", text: String = "", text2: String = "", op: Op = .equals,
+         type: ColumnType = .text, count: Int = 10) {
+        self.kind = kind
+        self.column = column
+        self.text = text
+        self.text2 = text2
+        self.op = op
+        self.type = type
+        self.count = count
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, column, text, text2, op, type, count, columns, aggregations, aggregation, joinKind, text3, text4
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        kind = try c.decode(Kind.self, forKey: .kind)
+        column = try c.decodeIfPresent(String.self, forKey: .column) ?? ""
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        text2 = try c.decodeIfPresent(String.self, forKey: .text2) ?? ""
+        op = try c.decodeIfPresent(Op.self, forKey: .op) ?? .equals
+        type = try c.decodeIfPresent(ColumnType.self, forKey: .type) ?? .text
+        count = try c.decodeIfPresent(Int.self, forKey: .count) ?? 10
+        columns = try c.decodeIfPresent([String].self, forKey: .columns) ?? []
+        aggregations = try c.decodeIfPresent([StepAggregation].self, forKey: .aggregations) ?? []
+        aggregation = try c.decodeIfPresent(Aggregation.self, forKey: .aggregation) ?? .sum
+        joinKind = try c.decodeIfPresent(JoinKind.self, forKey: .joinKind) ?? .left
+        text3 = try c.decodeIfPresent(String.self, forKey: .text3) ?? ""
+        text4 = try c.decodeIfPresent(String.self, forKey: .text4) ?? ""
+    }
 
     var label: String {
         switch kind {
@@ -55,6 +110,11 @@ struct TransformStep: Codable, Hashable, Identifiable {
         case .keepTopRows: L("Conserver les %@ premières lignes", count)
         case .appendTable: L("Ajouter les lignes de « %@ »", text)
         case .addIndex: L("Ajouter une colonne d'index « %@ »", text)
+        case .mergeTable: L("Fusionner avec « %@ » (%@ = %@)", text, column, text2)
+        case .groupBy: L("Regrouper par %@", columns.joined(separator: ", "))
+        case .pivotColumn: L("Pivoter « %@ » (valeurs : %@)", column, text)
+        case .unpivotColumns: L("Dépivoter %@", columns.joined(separator: ", "))
+        case .conditionalColumn: L("Colonne conditionnelle « %@ »", text)
         }
     }
 
@@ -73,6 +133,11 @@ struct TransformStep: Codable, Hashable, Identifiable {
         case .keepTopRows: "list.number"
         case .appendTable: "plus.rectangle.on.rectangle"
         case .addIndex: "number"
+        case .mergeTable: "arrow.triangle.merge"
+        case .groupBy: "square.stack.3d.up"
+        case .pivotColumn: "arrow.turn.right.up"
+        case .unpivotColumns: "arrow.turn.down.right"
+        case .conditionalColumn: "questionmark.diamond"
         }
     }
 }
@@ -210,6 +275,116 @@ enum Transform {
             let name = unique(s.text.isEmpty ? "Index" : s.text, cols)
             cols.append(DataColumn(name: name, type: .number))
             for r in rows.indices { rows[r].append(.number(Double(r + 1))) }
+        case .mergeTable:
+            guard let other = tables.first(where: { $0.name == s.text }) else { throw MeasureError(message: L("Table introuvable : %@", s.text)) }
+            let k = try index(s.column, cols)
+            guard let ok = other.columnIndex(s.text2) else { throw MeasureError(message: L("Colonne introuvable : %@", s.text2)) }
+            let bring = (s.columns.isEmpty ? other.columns.map(\.name).filter { $0 != s.text2 } : s.columns)
+                .compactMap { n in other.columnIndex(n).map { (n, $0) } }
+            var lookup: [String: [Int]] = [:]
+            for (i, r) in other.rows.enumerated() { lookup[r[ok].joinKey, default: []].append(i) }
+            var out: [[CellValue]] = []
+            for row in rows {
+                let matches = lookup[row[k].joinKey] ?? []
+                if matches.isEmpty {
+                    if s.joinKind == .left { out.append(row + bring.map { _ in .empty }) }
+                } else {
+                    for m in matches { out.append(row + bring.map { other.rows[m][$0.1] }) }
+                }
+            }
+            for (n, i) in bring {
+                cols.append(DataColumn(name: unique("\(other.name).\(n)", cols), type: other.columns[i].type))
+            }
+            rows = out
+        case .groupBy:
+            let keys = try s.columns.map { try index($0, cols) }
+            var aggs: [(TransformStep.StepAggregation, Int?)] = []
+            for a in s.aggregations { aggs.append((a, a.column.isEmpty ? nil : try index(a.column, cols))) }
+            var order: [[CellValue]] = []
+            var groups: [[CellValue]: [Acc]] = [:]
+            for r in rows {
+                let key = keys.map { r[$0] }
+                if groups[key] == nil {
+                    order.append(key)
+                    groups[key] = aggs.map { Acc(distinct: $0.0.aggregation == .distinctCount) }
+                }
+                for (j, (_, ci)) in aggs.enumerated() { groups[key]![j].add(ci.map { r[$0] } ?? .number(1)) }
+            }
+            var newCols = keys.map { cols[$0] }
+            for (a, ci) in aggs {
+                let auto = ci.map { L("%@ de %@", a.aggregation.label, cols[$0].name) } ?? L("Nombre de lignes")
+                newCols.append(DataColumn(name: a.name.isEmpty ? auto : a.name, type: .number))
+            }
+            var grouped: [[CellValue]] = []
+            for key in order {
+                var row = key
+                for (j, (a, ci)) in aggs.enumerated() {
+                    let r = groups[key]![j].result(ci == nil ? .count : a.aggregation)
+                    row.append(r.map { CellValue.number($0) } ?? .empty)
+                }
+                grouped.append(row)
+            }
+            rows = grouped
+            cols = []
+            for c in newCols { cols.append(DataColumn(name: unique(c.name, cols), type: c.type)) }
+        case .pivotColumn:
+            let p = try index(s.column, cols)
+            let v = try index(s.text, cols)
+            let keyIdx = cols.indices.filter { $0 != p && $0 != v }
+            var pivots: [String] = []
+            var order: [[CellValue]] = []
+            var cells: [[CellValue]: [String: Acc]] = [:]
+            for r in rows {
+                let label = GroupKey.of(r[p], nil).label
+                if !pivots.contains(label) { pivots.append(label) }
+                let key = keyIdx.map { r[$0] }
+                if cells[key] == nil { order.append(key); cells[key] = [:] }
+                cells[key]![label, default: Acc(distinct: s.aggregation == .distinctCount)].add(r[v])
+            }
+            let keyCols = keyIdx.map { cols[$0] }
+            cols = keyCols
+            for label in pivots { cols.append(DataColumn(name: unique(label, cols), type: .number)) }
+            rows = order.map { key in
+                key + pivots.map { l in cells[key]![l]?.result(s.aggregation).map { CellValue.number($0) } ?? .empty }
+            }
+        case .unpivotColumns:
+            let un = Set(try s.columns.map { try index($0, cols) })
+            guard !un.isEmpty else { throw MeasureError(message: L("Choisissez au moins une colonne.")) }
+            let keep = cols.indices.filter { !un.contains($0) }
+            var out: [[CellValue]] = []
+            var values: [CellValue] = []
+            for r in rows {
+                for c in cols.indices where un.contains(c) && !r[c].isEmpty {
+                    out.append(keep.map { r[$0] } + [.text(cols[c].name)])
+                    values.append(r[c])
+                }
+            }
+            let (type, typed) = Importer.inferColumn(Importer.cellsToRaw(values))
+            let attr = s.text.isEmpty ? L("Attribut") : s.text, val = s.text2.isEmpty ? L("Valeur") : s.text2
+            let keepCols = keep.map { cols[$0] }
+            cols = keepCols
+            cols.append(DataColumn(name: unique(attr, cols), type: .text))
+            cols.append(DataColumn(name: unique(val, cols), type: type))
+            rows = zip(out, typed).map { $0 + [$1] }
+        case .conditionalColumn:
+            let i = try index(s.column, cols)
+            let test = TransformStep(kind: .filterRows, column: s.column, text: s.text2, op: s.op)
+            var probe = cols, kept: [[CellValue]] = rows.enumerated().map { [.number(Double($0.offset))] + $0.element }
+            probe.insert(DataColumn(name: "\u{1}row", type: .number), at: 0)
+            try apply(test, &probe, &kept, tables)
+            let matching = Set(kept.compactMap { $0.first?.number.map(Int.init) })
+            func output(_ spec: String, _ row: [CellValue]) -> RawCell {
+                let t = spec.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("["), t.hasSuffix("]"), let ci = cols.firstIndex(where: { $0.name == String(t.dropFirst().dropLast()) }) {
+                    return Importer.cellsToRaw([row[ci]])[0]
+                }
+                return t.isEmpty ? .empty : .text(t)
+            }
+            let raw = rows.enumerated().map { output(matching.contains($0.offset) ? s.text3 : s.text4, $0.element) }
+            let (type, values) = Importer.inferColumn(raw)
+            _ = i
+            cols.append(DataColumn(name: unique(s.text.isEmpty ? L("Personnalisée") : s.text, cols), type: type))
+            for r in rows.indices { rows[r].append(values[r]) }
         }
     }
 }
@@ -345,6 +520,60 @@ struct StepEditor: View {
                     }
                 case .addIndex:
                     TextField(L("Nom de la colonne"), text: $step.text)
+                case .mergeTable:
+                    Picker(L("Table à fusionner"), selection: $step.text) {
+                        ForEach(state.tables.filter { $0.name != table.name }) { Text($0.name).tag($0.name) }
+                    }
+                    if let other = state.tables.first(where: { $0.name == step.text }) {
+                        Picker(L("Colonne correspondante"), selection: $step.text2) {
+                            ForEach(other.columns) { Text($0.name).tag($0.name) }
+                        }
+                        Picker(L("Type de jointure"), selection: $step.joinKind) {
+                            ForEach(TransformStep.JoinKind.allCases, id: \.self) { Text($0.label).tag($0) }
+                        }
+                        columnChecklist(L("Colonnes à ajouter (aucune = toutes)"), other.columns.map(\.name).filter { $0 != step.text2 })
+                    }
+                case .groupBy:
+                    columnChecklist(L("Regrouper par"), sourceColumns)
+                    ForEach($step.aggregations) { $a in
+                        HStack {
+                            Picker("", selection: $a.aggregation) {
+                                ForEach(Aggregation.allCases, id: \.self) { Text($0.label).tag($0) }
+                            }
+                            .labelsHidden().frame(width: 130)
+                            Picker("", selection: $a.column) {
+                                Text(L("(lignes)")).tag("")
+                                ForEach(sourceColumns, id: \.self) { Text($0).tag($0) }
+                            }
+                            .labelsHidden()
+                            TextField(L("Nom"), text: $a.name).frame(width: 110)
+                            Button { step.aggregations.removeAll { $0.id == a.id } } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    Button(L("Ajouter une agrégation")) {
+                        step.aggregations.append(TransformStep.StepAggregation(name: "", aggregation: .sum,
+                            column: table.columns.first { $0.type == .number && $0.expression == nil }?.name ?? ""))
+                    }
+                case .pivotColumn:
+                    Picker(L("Colonne des valeurs"), selection: $step.text) {
+                        ForEach(sourceColumns, id: \.self) { Text($0).tag($0) }
+                    }
+                    Picker(L("Agrégation"), selection: $step.aggregation) {
+                        ForEach(Aggregation.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                case .unpivotColumns:
+                    columnChecklist(L("Colonnes à dépivoter"), sourceColumns)
+                    TextField(L("Nom de la colonne d'attribut"), text: $step.text, prompt: Text(L("Attribut")))
+                    TextField(L("Nom de la colonne de valeur"), text: $step.text2, prompt: Text(L("Valeur")))
+                case .conditionalColumn:
+                    TextField(L("Nom de la colonne"), text: $step.text)
+                    Picker(L("Condition"), selection: $step.op) {
+                        ForEach(TransformStep.Op.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    if step.op.needsValue { TextField(L("Valeur"), text: $step.text2) }
+                    TextField(L("Alors"), text: $step.text3, prompt: Text(L("texte ou [Colonne]")))
+                    TextField(L("Sinon"), text: $step.text4, prompt: Text(L("texte ou [Colonne]")))
                 default:
                     EmptyView()
                 }
@@ -357,7 +586,7 @@ struct StepEditor: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(needsColumn && step.column.isEmpty)
+                .disabled((needsColumn && step.column.isEmpty) || !isComplete)
             }
         }
         .padding(20)
@@ -365,11 +594,45 @@ struct StepEditor: View {
     }
 
     private var needsColumn: Bool {
-        ![.removeDuplicates, .removeBlankRows, .keepTopRows, .appendTable, .addIndex].contains(step.kind)
+        ![.removeDuplicates, .removeBlankRows, .keepTopRows, .appendTable, .addIndex, .groupBy, .unpivotColumns].contains(step.kind)
+    }
+
+    private var sourceColumns: [String] { table.columns.filter { $0.expression == nil }.map(\.name) }
+
+    private func columnChecklist(_ title: String, _ names: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.system(size: 11)).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(names, id: \.self) { n in
+                        Toggle(n, isOn: Binding(get: { step.columns.contains(n) }, set: { on in
+                            if on { step.columns.append(n) } else { step.columns.removeAll { $0 == n } }
+                        }))
+                        .toggleStyle(.checkbox)
+                    }
+                }
+            }
+            .frame(maxHeight: 140)
+        }
+    }
+
+    private var isComplete: Bool {
+        switch step.kind {
+        case .mergeTable: !step.text.isEmpty && !step.text2.isEmpty
+        case .groupBy: !step.columns.isEmpty || !step.aggregations.isEmpty
+        case .pivotColumn: !step.text.isEmpty && step.text != step.column
+        case .unpivotColumns: !step.columns.isEmpty
+        default: true
+        }
     }
 
     private var title: String {
         switch step.kind {
+        case .mergeTable: L("Fusionner des requêtes")
+        case .groupBy: L("Regrouper par")
+        case .pivotColumn: L("Pivoter une colonne")
+        case .unpivotColumns: L("Dépivoter des colonnes")
+        case .conditionalColumn: L("Colonne conditionnelle")
         case .renameColumn: L("Renommer la colonne")
         case .filterRows: L("Filtrer les lignes")
         case .replaceValues: L("Remplacer les valeurs")
