@@ -42,6 +42,10 @@ struct ReportCanvas: View {
             .dropDestination(for: URL.self) { urls, _ in
                 let files = urls.filter(\.isFileURL)
                 guard !files.isEmpty else { return false }
+                if let pbi = files.first(where: { PowerBIImporter.extensions.contains($0.pathExtension.lowercased()) }) {
+                    state.importPowerBI(pbi)
+                    return true
+                }
                 state.importFiles(files)
                 return true
             }

@@ -136,6 +136,8 @@ struct RibbonView: View {
         HStack(spacing: 2) {
             RibbonGroup(L("Fichier")) {
                 RibbonButton(L("Ouvrir"), "folder") { state.openDocument() }
+                RibbonButton(L("Power BI…"), "square.and.arrow.down.on.square") { state.importPowerBIWithPanel() }
+                    .help(L("Importer un rapport Power BI (.pbit, .pbip, .pbix)…"))
                 RibbonButton(L("Enregistrer"), "square.and.arrow.down") { state.save() }
                 RibbonButton(L("Annuler|undo"), "arrow.uturn.backward") { state.undo() }.disabled(!state.canUndo)
                 RibbonButton(L("Rétablir"), "arrow.uturn.forward") { state.redo() }.disabled(!state.canRedo)

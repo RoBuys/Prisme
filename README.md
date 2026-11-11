@@ -65,6 +65,13 @@ import data, then build interactive reports with drag and drop. The interface is
   (select no visual to see the theme picker).
 - **Export**: all pages as a PDF, the current page as a PNG image, a visual's data as CSV (`;` and decimal commas
   in French, `,` in English).
+- **Power BI import** (**File › Import a Power BI Report…**, ⌥⌘O, or drop the file): **.pbit** templates and
+  **.pbip** projects (TMSL `model.bim` or TMDL, PBIR or legacy `report.json`) bring tables, columns, calculated
+  columns, measures, relationships, pages and visuals (scaled to the page). Data is reloaded from the sources found
+  in the M queries (CSV / Excel / JSON files — Windows paths are looked up next to the report or asked for — web,
+  PostgreSQL, MySQL). **.pbix** files only expose their layout: tables are recreated empty from the visuals' fields
+  (use **Change Source…** on a table) and measures as placeholders. An import summary lists what couldn't be
+  converted (unsupported visuals or DAX, calculated tables, bidirectional relationships).
 - **Saving** reports (data included) as `.prisme` files.
 - **Power BI reports shared with you** (**Power BI** view, cloud icon): sign in with your Microsoft work account,
   browse My workspace and shared reports, workspaces and apps, and display reports interactively (embedded with the
@@ -119,6 +126,7 @@ renewed automatically.
 
 - No many-to-many relationships, no bidirectional filtering.
 - The measure language is a subset of DAX: no calculated tables, no table variables, no `SUMMARIZE` / `ADDCOLUMNS`.
+- Power BI import doesn't run M transformations (only the source is read), and .pbix data can't be read.
 - Transformations cover common steps only (no custom M code, no fuzzy merge).
 
 ## Structure
@@ -143,6 +151,7 @@ renewed automatically.
 | `PowerBIService.swift` | Power BI REST API client and state |
 | `PowerBIView.swift` | Power BI view, settings and embedded report |
 | `Localization.swift` | `L()` translation helper, language setting and English strings |
+| `PowerBIImport.swift` | .pbit / .pbip / .pbix import (TMSL, TMDL, Layout, PBIR, M sources) |
 | `SampleData.swift` | Sample dataset (Ventes, Produits, Régions) |
 
 ## License

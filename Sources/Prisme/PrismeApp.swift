@@ -59,6 +59,8 @@ struct PrismeApp: App {
                 let _ = state.language   // rebuild menus when the language changes
                 Button(L("Nouveau rapport")) { state.newDocument() }.keyboardShortcut("n")
                 Button(L("Ouvrir…")) { state.openDocument() }.keyboardShortcut("o")
+                Button(L("Importer un rapport Power BI (.pbit, .pbip, .pbix)…")) { state.importPowerBIWithPanel() }
+                    .keyboardShortcut("o", modifiers: [.command, .option])
                 Divider()
                 Button(L("Obtenir des données…")) { state.showGetData = true }.keyboardShortcut("i")
                 Button(L("Importer un fichier…")) { state.importWithPanel() }.keyboardShortcut("i", modifiers: [.command, .shift])
@@ -140,6 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let state = AppState.shared
         let reports = urls.filter { $0.pathExtension.lowercased() == "prisme" }
         if let r = reports.first, state.confirmDiscard() { state.open(r) }
+        if let pbi = urls.first(where: { PowerBIImporter.extensions.contains($0.pathExtension.lowercased()) }) {
+            state.importPowerBI(pbi)
+            return
+        }
         state.importFiles(urls.filter { $0.pathExtension.lowercased() != "prisme" })
     }
 }

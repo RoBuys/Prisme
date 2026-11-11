@@ -528,6 +528,7 @@ struct FieldsPane: View {
                 Button(L("Nouvelle colonne calculée…")) { state.newColumn(in: t.name) }
                 Button(L("Renommer…")) { draft = t.name; renaming = t.name }
                 if t.source != nil { Button(L("Actualiser")) { state.refreshAll() } }
+                Button(L("Changer la source…")) { state.changeSource(of: t.name) }
                 Divider()
                 Button(L("Supprimer la table"), role: .destructive) { state.deleteTable(t.name) }
             }
