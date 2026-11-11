@@ -1,77 +1,76 @@
 # Prisme
 
-Application macOS native (SwiftUI + Swift Charts) d'informatique décisionnelle, inspirée de Power BI Desktop :
-importez des données, construisez des rapports interactifs par glisser-déposer.
+A native macOS business-intelligence app (SwiftUI + Swift Charts), inspired by Power BI Desktop:
+import data, then build interactive reports with drag and drop. The user interface is in French.
 
-## Fonctionnalités (v0.1)
+## Features (v0.1)
 
-- **Import de données** : CSV / TSV (détection du séparateur `,` `;` tab `|`, nombres au format français `1 234,56`,
-  UTF-8 ou Windows-1252) et Excel `.xlsx` (toutes les feuilles, dates Excel reconnues). Glissez un fichier sur la page
-  ou utilisez **Obtenir des données**. **Actualiser** relit les fichiers sources.
-- **Typage automatique** des colonnes (Nombre, Texte, Date), modifiable dans la vue **Données**.
-- **Canvas de rapport** 16:9 multi-pages : visuels déplaçables, redimensionnables, dupliquables.
-- **Visuels** : histogramme, barres, courbe, aires, secteurs, anneau, carte (KPI), tableau, segment.
-- **Volet Champs** : glissez les colonnes dans Axe / Légende / Valeurs, ou cliquez-les pour les ajouter au visuel
-  sélectionné. Agrégations : somme, moyenne, min, max, nombre, nombre distinct. Hiérarchie de dates
-  (année, trimestre, mois, jour).
-- **Filtres** : segments, filtres de page (volet Filtres) et **filtrage croisé** (cliquez sur une barre, une part,
-  un point ou une ligne de tableau pour filtrer les autres visuels de la page).
-- **Relations entre tables** (vue **Modèle**) : relations plusieurs-à-un détectées automatiquement à l'import
-  (colonnes de même nom et même type, dont l'une contient des valeurs uniques), ou créées en glissant une colonne
-  sur une autre. Un visuel peut combiner des champs de plusieurs tables reliées (schéma en étoile ou en flocon), et
-  les filtres se propagent du côté « 1 » vers le côté « * » (comme le filtrage à sens unique de Power BI).
-  Les relations peuvent être désactivées ; un second chemin entre deux tables est créé inactif pour éviter les
-  ambiguïtés.
-- **Mesures calculées** (bouton **Nouvelle mesure**, ou clic droit sur une table) avec un langage inspiré de DAX :
-  `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `DISTINCTCOUNT`, `COUNTROWS`, `DIVIDE`, `IF`, `ROUND`, `ABS`, `AND`/`OR`/`NOT`,
-  `ISBLANK`, `COALESCE`, opérateurs `+ - * /`, comparaisons, `&&`/`||`, références `[Autre mesure]`, et
-  `CALCULATE(expr, Table[Colonne] = valeur, ALL(…), ALLSELECTED(…), REMOVEFILTERS(…))`. L'éditeur valide
-  l'expression en direct et affiche sa valeur ; formats : entier, décimal, pourcentage, monétaire.
-  Exemple : `Part du CA = DIVIDE([Chiffre d'affaires], CALCULATE([Chiffre d'affaires], ALLSELECTED(Ventes)))`.
-- **Enregistrement** des rapports (données incluses) au format `.prisme`.
+- **Data import**: CSV / TSV (detects the `,` `;` tab `|` delimiters, French-style numbers such as `1 234,56`,
+  UTF-8 or Windows-1252) and Excel `.xlsx` (every sheet, Excel dates recognized). Drop a file on the page or use
+  **Obtenir des données** (Get data). **Actualiser** (Refresh) re-reads the source files.
+- **Automatic column typing** (number, text, date), editable in the **Données** (Data) view.
+- **16:9 report canvas** with multiple pages: visuals can be moved, resized and duplicated. The page scales to the
+  window, text included.
+- **Visuals**: column, bar, line, area, pie, donut, card (KPI), table, slicer.
+- **Fields pane**: drag columns into Axis / Legend / Values, or click them to add them to the selected visual.
+  Aggregations: sum, average, min, max, count, distinct count. Date hierarchy (year, quarter, month, day).
+- **Filters**: slicers, page filters (Filters pane) and **cross-filtering** (click a bar, a slice, a point or a table
+  row to filter the other visuals of the page).
+- **Relationships between tables** (**Modèle** / Model view): many-to-one relationships are detected on import
+  (columns with the same name and type, one of which has unique values), or created by dragging a column onto
+  another. A visual can combine fields from related tables (star or snowflake schema), and filters flow from the
+  "one" side to the "many" side (like Power BI's single-direction filtering). Relationships can be deactivated; a
+  second path between two tables is created inactive to avoid ambiguity.
+- **Calculated measures** (**Nouvelle mesure** / New measure button, or right-click a table) with a DAX-inspired
+  language: `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `DISTINCTCOUNT`, `COUNTROWS`, `DIVIDE`, `IF`, `ROUND`, `ABS`,
+  `AND`/`OR`/`NOT`, `ISBLANK`, `COALESCE`, `+ - * /` operators, comparisons, `&&`/`||`, `[Other measure]`
+  references, and `CALCULATE(expr, Table[Column] = value, ALL(…), ALLSELECTED(…), REMOVEFILTERS(…))`. The editor
+  validates the expression as you type and previews its value; formats: integer, decimal, percentage, currency.
+  Example: `Part du CA = DIVIDE([Chiffre d'affaires], CALCULATE([Chiffre d'affaires], ALLSELECTED(Ventes)))`.
+- **Saving** reports (data included) as `.prisme` files.
 
-## Construire
+## Building
 
 ```bash
-./build.sh          # crée Prisme.app
+./build.sh          # creates Prisme.app
 open Prisme.app
 ```
 
-Nécessite les Command Line Tools (Swift 6) et macOS 14+. Le script compile avec le SDK macOS 26.5 car, sans Xcode
-complet, les macros SwiftUI du SDK 27 ne sont pas disponibles.
+Requires the Command Line Tools (Swift 6) and macOS 14+. The script builds against the macOS 26.5 SDK because,
+without a full Xcode, the SwiftUI macros of the macOS 27 SDK are not available.
 
-Options utiles au développement :
+Development options:
 
-- `Prisme --inspect fichier.csv` : affiche la façon dont un fichier est importé, puis quitte.
-- `Prisme --sample` : démarre avec le jeu de données d'exemple (`--model` pour ouvrir la vue Modèle,
-  `--edit-measure "Nom"` pour ouvrir l'éditeur d'une mesure).
-- `Prisme --snapshot capture.png` : enregistre une image de la fenêtre 3 s après le lancement.
+- `Prisme --inspect file.csv`: prints how a file is imported, then quits.
+- `Prisme --sample`: starts with the sample dataset (`--model` opens the Model view,
+  `--edit-measure "Name"` opens a measure's editor).
+- `Prisme --snapshot capture.png`: saves an image of the window 3 s after launch.
 
-## Limites connues
+## Known limitations
 
-- Pas de relations plusieurs-à-plusieurs ni de filtrage bidirectionnel.
-- Langage de mesures limité : pas de fonctions d'itération (`SUMX`, `FILTER`), ni d'intelligence temporelle
-  (`TOTALYTD`, `SAMEPERIODLASTYEAR`), ni de colonnes calculées ; `CALCULATE` n'accepte que des filtres d'égalité.
-- Pas d'éditeur de requêtes (Power Query).
-- Pas d'annuler / rétablir.
+- No many-to-many relationships, no bidirectional filtering.
+- Limited measure language: no iterators (`SUMX`, `FILTER`), no time intelligence (`TOTALYTD`,
+  `SAMEPERIODLASTYEAR`), no calculated columns; `CALCULATE` only accepts equality filters.
+- No query editor (Power Query).
+- No undo / redo.
 
 ## Structure
 
-| Fichier | Rôle |
+| File | Role |
 |---|---|
-| `Models.swift` | Tables, champs, visuels, pages, document |
-| `Importer.swift` | Lecture CSV / XLSX et inférence des types |
-| `Measures.swift` | Langage des mesures : analyse, validation, évaluation |
-| `MeasureEditor.swift` | Éditeur de mesure |
-| `Engine.swift` | Modèle de données, résolution des relations, filtrage, regroupement et agrégation |
-| `AppState.swift` | État de l'application et actions |
-| `CanvasView.swift` | Page de rapport, déplacement / redimensionnement |
-| `VisualViews.swift` | Rendu des visuels (Swift Charts) |
-| `Panes.swift` | Volets Visualisations, Données, Filtres |
-| `DataGridView.swift` | Vue Données |
-| `ModelView.swift` | Vue Modèle et volet Relations |
-| `SampleData.swift` | Jeu de données d'exemple (Ventes, Produits, Régions) |
+| `Models.swift` | Tables, fields, visuals, pages, measures, relationships, document |
+| `Importer.swift` | CSV / XLSX reading and type inference |
+| `Measures.swift` | Measure language: parsing, validation, evaluation |
+| `MeasureEditor.swift` | Measure editor |
+| `Engine.swift` | Data model, relationship resolution, filtering, grouping and aggregation |
+| `AppState.swift` | Application state and actions |
+| `CanvasView.swift` | Report page, moving / resizing visuals |
+| `VisualViews.swift` | Visual rendering (Swift Charts) |
+| `Panes.swift` | Visualizations, Data and Filters panes |
+| `DataGridView.swift` | Data view |
+| `ModelView.swift` | Model view and Relationships pane |
+| `SampleData.swift` | Sample dataset (Ventes, Produits, Régions) |
 
-## Licence
+## License
 
-MIT — voir [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

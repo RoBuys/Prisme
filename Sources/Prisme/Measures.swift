@@ -3,8 +3,8 @@ import Foundation
 // A small DAX-like expression language for measures.
 //
 //   SUM(Ventes[Montant])                       aggregations: SUM AVERAGE MIN MAX COUNT DISTINCTCOUNT COUNTROWS
-//   DIVIDE([CA], COUNTROWS(Ventes))            [Nom] = another measure (or a column of the measure's table)
-//   CALCULATE([CA], Ventes[Canal] = "Magasin") filter arguments: T[C] = valeur, ALL(…), ALLSELECTED(…), REMOVEFILTERS(…)
+//   DIVIDE([CA], COUNTROWS(Ventes))            [Name] = another measure (or a column of the measure's table)
+//   CALCULATE([CA], Ventes[Canal] = "Magasin") filter arguments: T[C] = value, ALL(…), ALLSELECTED(…), REMOVEFILTERS(…)
 //   IF([CA] > 1000, 1, 0)                      + - * /  = <> < <= > >=  && ||  AND OR NOT  ABS ROUND BLANK ISBLANK
 
 struct MeasureError: Error, LocalizedError {
