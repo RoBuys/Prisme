@@ -130,6 +130,7 @@ struct ContentView: View {
 struct RibbonView: View {
     @Environment(AppState.self) private var state
     @State private var showVisualPicker = false
+    @State private var showBookmarks = false
 
     var body: some View {
         HStack(spacing: 2) {
@@ -177,6 +178,12 @@ struct RibbonView: View {
                     }
                 RibbonButton(L("Nouvelle page"), "doc.badge.plus") { state.mode = .report; state.addPage() }
             }
+            RibbonDivider()
+            RibbonGroup(L("Affichage")) {
+                RibbonButton(L("Signets"), "bookmark") { showBookmarks.toggle() }
+                    .popover(isPresented: $showBookmarks, arrowEdge: .bottom) { BookmarksPopover() }
+            }
+            .disabled(state.mode != .report)
             RibbonDivider()
             RibbonGroup(L("Exporter")) {
                 RibbonButton(L("PDF"), "doc.richtext") { state.exportPDF() }
@@ -419,5 +426,51 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: 380)
         .id(state.language)
+    }
+}
+
+/// Bookmarks list: click to apply, context menu to update, rename or delete.
+struct BookmarksPopover: View {
+    @Environment(AppState.self) private var state
+    @State private var renaming: UUID?
+    @State private var draft = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L("Signets")).font(.system(size: 13, weight: .semibold))
+            if state.bookmarks.isEmpty {
+                Text(L("Un signet mémorise la page, les filtres, les segments et l'exploration en cours."))
+                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(state.bookmarks) { b in
+                HStack {
+                    Image(systemName: "bookmark.fill").foregroundStyle(Theme.accent).font(.system(size: 10))
+                    if renaming == b.id {
+                        TextField("", text: $draft).textFieldStyle(.roundedBorder)
+                            .onSubmit { state.renameBookmark(b.id, draft); renaming = nil }
+                    } else {
+                        Text(b.name).font(.system(size: 12))
+                    }
+                    Spacer()
+                    Text(state.pages.first { $0.id == b.pageID }?.name ?? "").font(.system(size: 10)).foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+                .onTapGesture { state.applyBookmark(b.id) }
+                .contextMenu {
+                    Button(L("Mettre à jour")) { state.updateBookmark(b.id) }
+                    Button(L("Renommer")) { draft = b.name; renaming = b.id }
+                    Button(L("Supprimer"), role: .destructive) { state.deleteBookmark(b.id) }
+                }
+            }
+            Divider()
+            Button { state.addBookmark() } label: { Label(L("Ajouter un signet"), systemImage: "plus") }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.accent)
+            Text(L("Clic droit sur un signet pour le mettre à jour, le renommer ou le supprimer."))
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+        }
+        .padding(12)
+        .frame(width: 260)
     }
 }

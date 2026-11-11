@@ -42,6 +42,7 @@ final class AppState {
     var stepDraft: StepDraft?
     var stepErrors: [String: [UUID: String]] = [:]
     var modelLayout: [String: CGPoint] = [:]
+    var bookmarks: [Bookmark] = []
     /// Report color theme (see `Theme.themes`).
     var theme = Theme.defaultName
     var pages: [ReportPage]
@@ -62,6 +63,7 @@ final class AppState {
         var measures: [Measure]
         var modelLayout: [String: CGPoint]
         var theme: String
+        var bookmarks: [Bookmark]
         var currentPageID: UUID
     }
 
@@ -74,7 +76,7 @@ final class AppState {
 
     private func snapshot() -> Snapshot {
         Snapshot(tables: tables, pages: pages, relationships: relationships, measures: measures,
-                 modelLayout: modelLayout, theme: theme, currentPageID: currentPageID)
+                 modelLayout: modelLayout, theme: theme, bookmarks: bookmarks, currentPageID: currentPageID)
     }
 
     /// Records a change for undo and marks the document as modified.
@@ -117,6 +119,7 @@ final class AppState {
         measures = s.measures
         modelLayout = s.modelLayout
         theme = s.theme
+        bookmarks = s.bookmarks
         currentPageID = pages.contains { $0.id == s.currentPageID } ? s.currentPageID : pages[0].id
         if let id = selectedVisualID, visual(id) == nil { selectedVisualID = nil }
         crossFilter = nil
@@ -500,9 +503,111 @@ final class AppState {
         mutateVisual(id) { v in
             if v.slicerSelection.contains(label) { v.slicerSelection.remove(label) } else { v.slicerSelection.insert(label) }
         }
+        propagateSlicer(id)
     }
 
-    func clearSlicer(_ id: UUID) { mutateVisual(id) { $0.slicerSelection = [] } }
+    func clearSlicer(_ id: UUID) {
+        mutateVisual(id) { $0.slicerSelection = [] }
+        propagateSlicer(id)
+    }
+
+    // MARK: Synced slicers
+
+    private func syncKey(_ v: Visual) -> String? {
+        guard v.type == .slicer, v.syncSlicer == true, let f = v.axis.first else { return nil }
+        return f.columnKey + "|" + (f.dateLevel?.rawValue ?? "")
+    }
+
+    /// Copies a synced slicer's selection to every synced slicer on the same field (all pages).
+    func propagateSlicer(_ id: UUID) {
+        guard let source = visual(id), let key = syncKey(source) else { return }
+        for p in pages.indices {
+            for i in pages[p].visuals.indices where pages[p].visuals[i].id != id && syncKey(pages[p].visuals[i]) == key {
+                pages[p].visuals[i].slicerSelection = source.slicerSelection
+            }
+        }
+    }
+
+    func setSlicerSync(_ id: UUID, _ on: Bool) {
+        mutateVisual(id) { $0.syncSlicer = on }
+        if on {
+            // Adopt the selection of an existing synced slicer, if any.
+            if let v = visual(id), let key = syncKey(v),
+               let other = pages.flatMap(\.visuals).first(where: { $0.id != id && syncKey($0) == key }) {
+                mutateVisual(id) { $0.slicerSelection = other.slicerSelection }
+            }
+        }
+    }
+
+    /// Puts a synced copy of a slicer on every other page that doesn't have one yet.
+    func addSlicerToAllPages(_ id: UUID) {
+        guard var v = visual(id) else { return }
+        v.syncSlicer = true
+        mutateVisual(id) { $0.syncSlicer = true }
+        let key = syncKey(v)
+        for p in pages.indices where !pages[p].visuals.contains(where: { $0.id == id }) {
+            if pages[p].visuals.contains(where: { syncKey($0) == key }) { continue }
+            var copy = v
+            copy.id = UUID()
+            pages[p].visuals.append(copy)
+        }
+        didChange()
+    }
+
+    // MARK: Bookmarks
+
+    func addBookmark() {
+        var n = L("Signet %@", bookmarks.count + 1), k = bookmarks.count + 2
+        while bookmarks.contains(where: { $0.name == n }) { n = L("Signet %@", k); k += 1 }
+        bookmarks.append(captureBookmark(name: n))
+        didChange()
+    }
+
+    private func captureBookmark(name: String, id: UUID = UUID()) -> Bookmark {
+        var b = Bookmark(id: id, name: name, pageID: currentPageID)
+        for p in pages {
+            b.pageFilters[p.id] = p.filters
+            for v in p.visuals {
+                b.visuals[v.id] = Bookmark.VisualState(slicerSelection: v.slicerSelection, drillLevel: v.drillLevel, drillPath: v.drillPath)
+            }
+        }
+        return b
+    }
+
+    func updateBookmark(_ id: UUID) {
+        guard let i = bookmarks.firstIndex(where: { $0.id == id }) else { return }
+        bookmarks[i] = captureBookmark(name: bookmarks[i].name, id: id)
+        didChange()
+    }
+
+    func applyBookmark(_ id: UUID) {
+        guard let b = bookmarks.first(where: { $0.id == id }) else { return }
+        for p in pages.indices {
+            if let f = b.pageFilters[pages[p].id] { pages[p].filters = f }
+            for i in pages[p].visuals.indices {
+                if let s = b.visuals[pages[p].visuals[i].id] {
+                    pages[p].visuals[i].slicerSelection = s.slicerSelection
+                    pages[p].visuals[i].drillLevel = s.drillLevel
+                    pages[p].visuals[i].drillPath = s.drillPath
+                }
+            }
+        }
+        if pages.contains(where: { $0.id == b.pageID }) { selectPage(b.pageID) }
+        crossFilter = nil
+        didChange()
+    }
+
+    func renameBookmark(_ id: UUID, _ name: String) {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        guard !n.isEmpty, let i = bookmarks.firstIndex(where: { $0.id == id }) else { return }
+        bookmarks[i].name = n
+        didChange()
+    }
+
+    func deleteBookmark(_ id: UUID) {
+        bookmarks.removeAll { $0.id == id }
+        didChange()
+    }
 
     // MARK: Page filters
 
@@ -1095,6 +1200,7 @@ final class AppState {
         tables = []
         relationships = []
         measures = []
+        bookmarks = []
         theme = Theme.defaultName
         modelLayout = [:]
         pages = [p]
@@ -1125,6 +1231,7 @@ final class AppState {
             measures = doc.measures
             modelLayout = doc.modelLayout
             theme = doc.theme ?? Theme.defaultName
+            bookmarks = doc.bookmarks
             pages = doc.pages.isEmpty ? [ReportPage(name: L("Page 1"))] : doc.pages
             currentPageID = pages[0].id
             selectedVisualID = nil
@@ -1156,7 +1263,7 @@ final class AppState {
 
     private func write(to url: URL) -> Bool {
         do {
-            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout, theme: theme))
+            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout, theme: theme, bookmarks: bookmarks))
             try data.write(to: url, options: .atomic)
             fileURL = url
             isDirty = false

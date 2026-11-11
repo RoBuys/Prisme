@@ -390,6 +390,8 @@ struct Visual: Identifiable, Hashable, Codable {
     var drillLevel: Int?
     var drillPath: [String]?
     var drillMode: Bool?
+    /// Slicer: share its selection with synced slicers on the same field (all pages).
+    var syncSlicer: Bool?
 
     var fmt: VisualFormat { format ?? VisualFormat() }
 
@@ -489,6 +491,21 @@ struct Relationship: Identifiable, Hashable, Codable {
     func involves(_ table: String) -> Bool { fromTable == table || toTable == table }
 }
 
+/// A saved report state: current page, page filters, slicer selections and drill positions.
+struct Bookmark: Identifiable, Hashable, Codable {
+    struct VisualState: Hashable, Codable {
+        var slicerSelection: Set<String>
+        var drillLevel: Int?
+        var drillPath: [String]?
+    }
+
+    var id = UUID()
+    var name: String
+    var pageID: UUID
+    var pageFilters: [UUID: [PageFilter]] = [:]
+    var visuals: [UUID: VisualState] = [:]
+}
+
 struct ReportDocument: Codable {
     var version = 2
     var tables: [DataTable]
@@ -497,10 +514,12 @@ struct ReportDocument: Codable {
     var measures: [Measure] = []
     var modelLayout: [String: CGPoint] = [:]
     var theme: String?
+    var bookmarks: [Bookmark] = []
 
     init(tables: [DataTable], pages: [ReportPage], relationships: [Relationship], measures: [Measure],
-         modelLayout: [String: CGPoint], theme: String?) {
+         modelLayout: [String: CGPoint], theme: String?, bookmarks: [Bookmark] = []) {
         self.theme = theme
+        self.bookmarks = bookmarks
         self.version = 3
         self.tables = tables
         self.pages = pages
@@ -509,7 +528,7 @@ struct ReportDocument: Codable {
         self.modelLayout = modelLayout
     }
 
-    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout, theme }
+    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout, theme, bookmarks }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -520,5 +539,6 @@ struct ReportDocument: Codable {
         measures = try c.decodeIfPresent([Measure].self, forKey: .measures) ?? []
         modelLayout = try c.decodeIfPresent([String: CGPoint].self, forKey: .modelLayout) ?? [:]
         theme = try c.decodeIfPresent(String.self, forKey: .theme)
+        bookmarks = try c.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
     }
 }

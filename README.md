@@ -57,6 +57,8 @@ import data, then build interactive reports with drag and drop. The interface is
   to drill up, drill down on click, or go to the next level from the visual's header. **Drillthrough**: add
   drillthrough fields to a page (Filters pane), select a category in a visual elsewhere, then “…” › Drill through;
   a Back button returns to the source page.
+- **Bookmarks** (ribbon › Bookmarks): save and restore the current page, page filters, slicer selections and drill
+  state. **Synced slicers**: slicers on the same field can share their selection across pages (“Add to all pages”).
 - **Undo / redo** (⌘Z / ⇧⌘Z) for every document change.
 - **Hover tooltips** on charts, optional **data labels**, and per-visual **formatting**: legend, gridlines, axis
   titles, main color, value format, sorting, **Top N**; click a table header to sort. Five report **themes**

@@ -343,6 +343,16 @@ struct VisualizationsPane: View {
         if v.type == .table {
             Text(L("Cliquez sur un en-tête de colonne pour trier.")).font(.system(size: 10)).foregroundStyle(.tertiary)
         }
+        if v.type == .slicer {
+            Toggle(L("Synchroniser entre les pages"), isOn: Binding(get: { v.syncSlicer == true },
+                                                                  set: { state.setSlicerSync(v.id, $0) }))
+                .toggleStyle(.switch).controlSize(.small).font(.system(size: 11))
+            Button(L("Ajouter à toutes les pages")) { state.addSlicerToAllPages(v.id) }
+                .controlSize(.small)
+                .disabled(state.pages.count < 2)
+            Text(L("Les segments synchronisés sur le même champ partagent leur sélection."))
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+        }
         if v.type == .column || v.type == .bar {
             toggle(L("Couleur selon la valeur"), v, \.colorByValue)
             if f.colorByValue {

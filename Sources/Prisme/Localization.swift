@@ -638,6 +638,18 @@ enum Strings {
         "Couleur": "Color",
         "Mise en forme conditionnelle": "Conditional formatting",
 
+        // Bookmarks & synced slicers
+        "Signet %@": "Bookmark %@",
+        "Affichage": "View",
+        "Signets": "Bookmarks",
+        "Un signet mémorise la page, les filtres, les segments et l'exploration en cours.": "A bookmark remembers the page, filters, slicers and drill state.",
+        "Mettre à jour": "Update",
+        "Ajouter un signet": "Add Bookmark",
+        "Clic droit sur un signet pour le mettre à jour, le renommer ou le supprimer.": "Right-click a bookmark to update, rename or delete it.",
+        "Synchroniser entre les pages": "Sync across pages",
+        "Ajouter à toutes les pages": "Add to All Pages",
+        "Les segments synchronisés sur le même champ partagent leur sélection.": "Synced slicers on the same field share their selection.",
+
         // Export
         "Exporter": "Export",
         "PDF": "PDF",
