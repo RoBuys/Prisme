@@ -14,6 +14,8 @@ struct MeasureDraft: Identifiable {
     /// A calculated column rather than a measure; `originalName` is the column being edited.
     var isColumn = false
     var originalName: String?
+    /// A calculated table (`originalName` is the table being edited).
+    var isTable = false
 }
 
 struct StepDraft: Identifiable {
@@ -862,6 +864,14 @@ final class AppState {
             if measures[i].table == old { measures[i].table = n }
             measures[i].expression = Self.renameTableReferences(in: measures[i].expression, from: old, to: n)
         }
+        for t in tables.indices {
+            if let e = tables[t].expression { tables[t].expression = Self.renameTableReferences(in: e, from: old, to: n) }
+            for c in tables[t].columns.indices {
+                if let e = tables[t].columns[c].expression {
+                    tables[t].columns[c].expression = Self.renameTableReferences(in: e, from: old, to: n)
+                }
+            }
+        }
         for r in relationships.indices {
             if relationships[r].fromTable == old { relationships[r].fromTable = n }
             if relationships[r].toTable == old { relationships[r].toTable = n }
@@ -1039,6 +1049,17 @@ final class AppState {
         measureDraft = MeasureDraft(id: nil, name: n, table: home, expression: "", format: .auto, isColumn: true)
     }
 
+    func newTable() {
+        var n = L("Table"), k = 2
+        while tables.contains(where: { $0.name.caseInsensitiveEquals(n) }) { n = L("Table %@", k); k += 1 }
+        measureDraft = MeasureDraft(id: nil, name: n, table: tables.first?.name ?? "", expression: "", format: .auto, isTable: true)
+    }
+
+    func editTable(_ name: String) {
+        guard let t = tables.first(where: { $0.name == name }), let e = t.expression else { return }
+        measureDraft = MeasureDraft(id: nil, name: name, table: name, expression: e, format: .auto, originalName: name, isTable: true)
+    }
+
     func editColumn(table: String, column: DataColumn) {
         measureDraft = MeasureDraft(id: nil, name: column.name, table: table, expression: column.expression ?? "",
                                     format: .auto, isColumn: true, originalName: column.name)
@@ -1065,9 +1086,89 @@ final class AppState {
         return (.text, values.map { v in v.isBlank ? .empty : .text(v.string) })
     }
 
+    // MARK: Calculated tables
+
+    /// Evaluates a calculated table expression: columns (types inferred) and rows.
+    func computeTable(expression: String, model m: DataModel? = nil) throws -> ([DataColumn], [[CellValue]]) {
+        let m = m ?? model
+        if let err = MeasureCompiler.validateTable(expression, m) { throw MeasureError(message: err) }
+        guard case .success(let e) = MeasureCompiler.parse(expression) else { throw MeasureError(message: L("Expression invalide.")) }
+        let probe = Measure(name: "__table", table: m.tables.first?.name ?? "", expression: expression)
+        let deps = MeasureCompiler.dependencies(probe, m)
+        guard let ctx = Engine.context(for: deps.isEmpty ? [FieldRef(table: probe.table, column: "")] : deps, m) else {
+            throw MeasureError(message: L("Les tables utilisées ne sont pas reliées entre elles."))
+        }
+        let (names, values) = try MeasureEvaluator(ctx: ctx, model: m).evaluateTable(e)
+        var columns: [DataColumn] = []
+        var rows = Array(repeating: [CellValue](), count: values.count)
+        for (i, n) in names.enumerated() {
+            let col = values.map { $0[i] }
+            let present = col.filter { !$0.isBlank }
+            let type: ColumnType
+            if !present.isEmpty && present.allSatisfy({ if case .date = $0 { return true }; return false }) { type = .date }
+            else if present.allSatisfy({ if case .number = $0 { return true }; return false }) { type = .number }
+            else { type = .text }
+            columns.append(DataColumn(name: n, type: type))
+            for r in rows.indices { rows[r].append(type == .text ? (col[r].isBlank ? .empty : .text(col[r].string)) : col[r].cell) }
+        }
+        return (columns, rows)
+    }
+
+    /// Creates or updates a calculated table. Returns an error message, or nil on success.
+    func saveCalculatedTable(name raw: String, expression: String, originalName: String? = nil) -> String? {
+        let name = raw.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return L("Donnez un nom à la table.") }
+        guard !tables.contains(where: { $0.name.caseInsensitiveEquals(name) && $0.name != originalName }) else {
+            return L("Une table « %@ » existe déjà.", name)
+        }
+        // The table can't use itself.
+        var m = model
+        if let old = originalName { m.tables.removeAll { $0.name == old } }
+        let result: ([DataColumn], [[CellValue]])
+        do { result = try computeTable(expression: expression, model: m) } catch { return error.localizedDescription }
+        if let old = originalName, tables.contains(where: { $0.name == old }) {
+            if old != name { renameTable(old, to: name) }
+            guard let ti = tables.firstIndex(where: { $0.name == name }) else { return nil }
+            let calc = tables[ti].columns.filter { $0.expression != nil }
+            tables[ti].expression = expression
+            tables[ti].columns = result.0 + calc
+            tables[ti].rows = result.1.map { $0 + Array(repeating: .empty, count: calc.count) }
+        } else {
+            var t = DataTable(name: name, columns: result.0, rows: result.1)
+            t.expression = expression
+            tables.append(t)
+        }
+        dataTableName = name
+        recomputeCalculatedColumns()
+        didChange()
+        return nil
+    }
+
+    /// Recomputes calculated tables from the current data; a table whose expression fails keeps its rows.
+    func recomputeCalculatedTables() {
+        for ti in tables.indices {
+            guard let expr = tables[ti].expression else { continue }
+            var m = model
+            m.tables.remove(at: ti)
+            guard let (cols, rows) = try? computeTable(expression: expr, model: m) else { continue }
+            let calc = tables[ti].columns.filter { $0.expression != nil }
+            tables[ti].columns = cols + calc
+            tables[ti].rows = rows.map { $0 + Array(repeating: .empty, count: calc.count) }
+        }
+    }
+
     /// Recomputes calculated columns (all tables, in column order). Errors leave blank values.
     func recomputeCalculatedColumns() {
-        for ti in tables.indices {
+        recomputeColumnsOnly()
+        let calculated = Set(tables.filter { $0.expression != nil }.map(\.name))
+        if !calculated.isEmpty {
+            recomputeCalculatedTables()
+            recomputeColumnsOnly(in: calculated)
+        }
+    }
+
+    private func recomputeColumnsOnly(in only: Set<String>? = nil) {
+        for ti in tables.indices where only?.contains(tables[ti].name) ?? true {
             for ci in tables[ti].columns.indices {
                 guard let expr = tables[ti].columns[ci].expression else { continue }
                 let result = try? computeColumn(table: tables[ti].name, expression: expr)
@@ -1144,6 +1245,7 @@ final class AppState {
     /// Validates and stores a draft. Returns an error message, or nil on success.
     func saveMeasure(_ d: MeasureDraft) -> String? {
         if d.isColumn { return saveColumn(d) }
+        if d.isTable { return saveCalculatedTable(name: d.name, expression: d.expression, originalName: d.originalName) }
         let name = d.name.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return L("Donnez un nom à la mesure.") }
         guard !name.contains("[") && !name.contains("]") else { return L("Le nom ne peut pas contenir de crochets.") }
@@ -1192,6 +1294,17 @@ final class AppState {
 
     /// Preview of a draft over all rows (no filters).
     func previewMeasure(_ d: MeasureDraft) -> String {
+        if d.isTable {
+            guard !d.expression.isEmpty else { return "" }
+            var m = model
+            if let old = d.originalName { m.tables.removeAll { $0.name == old } }
+            do {
+                let (cols, rows) = try computeTable(expression: d.expression, model: m)
+                return L("%@ lignes · %@", rows.count.formatted(), cols.map(\.name).joined(separator: ", "))
+            } catch {
+                return "⚠︎ " + error.localizedDescription
+            }
+        }
         if d.isColumn {
             guard !d.expression.isEmpty else { return "" }
             if let err = MeasureCompiler.validate(d.expression, home: d.table, name: "", model) { return "⚠︎ " + err }

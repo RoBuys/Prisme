@@ -51,6 +51,13 @@ import data, then build interactive reports with drag and drop. The interface is
   `ALLEXCEPT`, `KEEPFILTERS`, `USERELATIONSHIP`, `LOOKUPVALUE`, `DATEDIFF`, `EOMONTH`, `DATE`, `TODAY`, `FORMAT`,
   `CONCATENATE`, `INT`, `MOD`, `POWER`, `SQRT`, `VALUE`, and **quick measures** in the editor (year to date, previous
   year, year-over-year %, running total, % of total, rank, average per category).
+  **Table functions**: `SUMMARIZE`, `SUMMARIZECOLUMNS`, `ADDCOLUMNS`, `SELECTCOLUMNS`, `CALCULATETABLE`, `DISTINCT`,
+  usable in iterators, `COUNTROWS`, `RANKX`, `TOPN` and as `CALCULATE` filters, and **table variables**
+  (`VAR t = FILTER(…) RETURN SUMX(t, [Total])`). Example:
+  `MAXX(SUMMARIZE(Ventes, Ventes[Région], "CA", [Chiffre d'affaires]), [CA])`.
+- **Calculated tables** (**Nouvelle table** / New table): a table expression (`SUMMARIZE`, `ADDCOLUMNS`, `FILTER`,
+  `VALUES`…) materialized as a table you can use in visuals, relationships and measures; recomputed after each
+  refresh and saved with the report.
 - **Calculated columns** (**Nouvelle colonne** / New column): an expression evaluated for each row (row context,
   `RELATED`, measures with context transition), recomputed after each refresh.
 - **Hierarchies and drill**: put several fields on a chart's axis (or turn a date into Year › Quarter › Month › Day)
@@ -64,7 +71,9 @@ import data, then build interactive reports with drag and drop. The interface is
   titles, main color, value format, sorting, **Top N**; click a table header to sort. Five report **themes**
   (select no visual to see the theme picker).
 - **Export**: all pages as a PDF, the current page as a PNG image, a visual's data as CSV (`;` and decimal commas
-  in French, `,` in English).
+  in French, `,` in English), and the whole report as a **Power BI template (.pbit)** (File › Export, or ribbon ›
+  Power BI): tables with their data embedded as "Enter data" queries (PostgreSQL / MySQL tables keep their query),
+  calculated columns and tables, measures with their format, relationships, pages, visuals and text boxes.
 - **Power BI import** (**File › Import a Power BI Report…**, ⌥⌘O, or drop the file): **.pbit** templates and
   **.pbip** projects (TMSL `model.bim` or TMDL, PBIR or legacy `report.json`) bring tables, columns, calculated
   columns, measures, relationships, pages and visuals (scaled to the page). Data is reloaded from the sources found
@@ -73,8 +82,8 @@ import data, then build interactive reports with drag and drop. The interface is
   is decompressed (Microsoft's Xpress9 decoder) and its metadata read, so tables, columns, measures, relationships
   and Power Query sources come through like a .pbit, and the rows stored in the file (VertiPaq column storage:
   dictionaries, Huffman-compressed strings, RLE and bit-packed segments, value-encoded columns) are decoded, so the
-  report works without access to the original sources (snapshot of the last refresh). Simple calculated tables
-  (`GENERATESERIES`, `CALENDAR`, `CALENDARAUTO`) are computed. An import summary lists what couldn't be
+  report works without access to the original sources (snapshot of the last refresh). Calculated tables are
+  computed (`GENERATESERIES`, `CALENDAR`, `CALENDARAUTO` and the table functions above). An import summary lists what couldn't be
   converted (unsupported visuals or DAX, calculated tables, bidirectional relationships).
 - **Page elements**: text boxes (with `{Measure}` placeholders showing live values), images, shapes and buttons
   (⌘-click to go to a page, apply a bookmark, go back after a drillthrough or open a link).
@@ -141,7 +150,10 @@ renewed automatically.
 ## Known limitations
 
 - No many-to-many relationships, no bidirectional filtering.
-- The measure language is a subset of DAX: no calculated tables, no table variables, no `SUMMARIZE` / `ADDCOLUMNS`.
+- The measure language is a subset of DAX: no `CROSSJOIN`, `UNION`, `GENERATE`, `GROUPBY`, no calculation groups.
+- .pbit export: date levels on an axis (year, month…) are exported as the date column (Power BI's auto date
+  tables aren't generated); images, shapes, buttons, page filters and slicer selections aren't exported. The
+  template is checked by reimporting it into Prisme; opening it in Power BI Desktop hasn't been tested on Windows.
 - Power BI import doesn't run M transformations (only the source is read); .pbix files saved with the multithreaded
   XPress9 variant (very large models) aren't supported yet.
 - Transformations cover common steps only (no custom M code, no fuzzy merge).
@@ -163,6 +175,7 @@ renewed automatically.
 | `Transforms.swift` | Transformation steps, applied-steps pane and step editor |
 | `MoreVisuals.swift` | Scatter, gauge, KPI and map visuals |
 | `Export.swift` | PDF / PNG / CSV export |
+| `PBITExport.swift` | Power BI template (.pbit) export: TMSL model, "Enter data" queries, report layout, ZIP |
 | `ModelView.swift` | Model view and Relationships pane |
 | `PowerBIAuth.swift` | Microsoft Entra sign-in (PKCE) and Keychain storage |
 | `PowerBIService.swift` | Power BI REST API client and state |

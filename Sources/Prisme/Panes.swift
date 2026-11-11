@@ -530,6 +530,7 @@ struct FieldsPane: View {
                 Button(L("Afficher les données")) { state.dataTableName = t.name; state.mode = .data }
                 Button(L("Nouvelle mesure…")) { state.newMeasure(in: t.name) }
                 Button(L("Nouvelle colonne calculée…")) { state.newColumn(in: t.name) }
+                if t.expression != nil { Button(L("Modifier la table calculée…")) { state.editTable(t.name) } }
                 Button(L("Renommer…")) { draft = t.name; renaming = t.name }
                 if t.source != nil { Button(L("Actualiser")) { state.refreshAll() } }
                 Button(L("Changer la source…")) { state.changeSource(of: t.name) }

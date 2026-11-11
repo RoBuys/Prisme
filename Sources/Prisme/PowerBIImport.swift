@@ -571,17 +571,71 @@ enum MSource {
               let packed = Data(base64Encoded: b64), let json = inflate(packed),
               let rows = (try? JSONSerialization.jsonObject(with: json)) as? [[Any]] else { return nil }
         var names: [String] = []
-        if let r = m.range(of: "type table ["), let end = m[r.upperBound...].firstIndex(of: "]") {
-            for part in m[r.upperBound..<end].split(separator: ",") {
-                let lhs = part.split(separator: "=", maxSplits: 1).first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
-                names.append(lhs.hasPrefix("#\"") ? String(lhs.dropFirst(2).dropLast()).replacingOccurrences(of: "\"\"", with: "\"") : lhs)
+        if let r = m.range(of: "type table [") {
+            // `Name = _t, #"Quoted, name" = _t, …]`: quoted names may hold commas, brackets or "".
+            let chars = Array(m[r.upperBound...])
+            var i = 0, current = "", inValue = false
+            while i < chars.count {
+                let ch = chars[i]
+                if !inValue && ch == "#" && i + 1 < chars.count && chars[i + 1] == "\"" {
+                    i += 2
+                    while i < chars.count {
+                        if chars[i] == "\"" {
+                            if i + 1 < chars.count && chars[i + 1] == "\"" { current.append("\""); i += 2; continue }
+                            break
+                        }
+                        current.append(chars[i]); i += 1
+                    }
+                } else if ch == "=" && !inValue {
+                    names.append(current.trimmingCharacters(in: .whitespaces)); current = ""; inValue = true
+                } else if ch == "," {
+                    inValue = false
+                } else if ch == "]" {
+                    break
+                } else if !inValue {
+                    current.append(ch)
+                }
+                i += 1
             }
         }
         let width = max(names.count, rows.map(\.count).max() ?? 0)
         while names.count < width { names.append(L("Colonne %@", names.count + 1)) }
+        // Invariant-culture types (as Prisme writes them): convert directly instead of inferring from text.
+        var kinds: [Character?] = Array(repeating: nil, count: width)
+        let typePattern = #"\{"((?:[^"]|"")*)",\s*(Int64\.Type|type number|type datetime|type date)\}"#
+        let invariant = m.contains("Table.TransformColumnTypes") && m.contains("\"en-US\")")
+        if invariant, let re = try? NSRegularExpression(pattern: typePattern) {
+            for match in re.matches(in: m, range: NSRange(m.startIndex..., in: m)) {
+                guard let nr = Range(match.range(at: 1), in: m), let tr = Range(match.range(at: 2), in: m) else { continue }
+                let name = m[nr].replacingOccurrences(of: "\"\"", with: "\"")
+                if let i = names.firstIndex(of: name) { kinds[i] = m[tr].hasPrefix("type date") ? "d" : "n" }
+            }
+        }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withFullDate, .withDashSeparatorInDate]
+        iso.timeZone = Fmt.calendar.timeZone
+        let isoTime = DateFormatter()
+        isoTime.locale = Locale(identifier: "en_US_POSIX")
+        isoTime.timeZone = Fmt.calendar.timeZone
+        isoTime.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        var dates: [String: Date] = [:]   // dates repeat a lot; parsing each cell is slow
+        func date(_ s: String) -> Date? {
+            if let d = dates[s] { return d }
+            let d = s.count == 10 ? iso.date(from: s) : isoTime.date(from: s)
+            dates[s] = d
+            return d
+        }
         return [names.map { .text($0) }] + rows.map { r in (0..<width).map { i in
             guard i < r.count else { return RawCell.empty }
-            if let s = r[i] as? String { return s.isEmpty ? .empty : .text(s) }
+            if let s = r[i] as? String {
+                if s.isEmpty { return .empty }
+                switch kinds[i] {
+                case "n": if let d = Double(s) { return .number(d) }
+                case "d": if let d = date(s) { return .date(d) }
+                default: break
+                }
+                return .text(s)
+            }
             if let n = r[i] as? NSNumber { return .number(n.doubleValue) }
             return .empty
         } }
@@ -712,9 +766,11 @@ extension AppState {
             if spec.calculated && spec.columns.isEmpty { notes.append(L("Table calculée ignorée : %@", spec.name)); continue }
             if spec.calculated, let stored = project.storedData[spec.name],
                let rows = Self.storedRows(stored, spec.columns, spec.columns.map { Self.columnType($0.dataType) }) {
-                tables.append(DataTable(name: spec.name, columns: spec.columns.map {
+                var table = DataTable(name: spec.name, columns: spec.columns.map {
                     DataColumn(name: $0.name, type: Self.columnType($0.dataType), expression: $0.expression)
-                }, rows: rows))
+                }, rows: rows)
+                table.expression = spec.calcExpression
+                tables.append(table)
                 loadedCount += 1
                 for m in spec.measures {
                     measures.append(Measure(name: m.name, table: spec.name, expression: m.expression, format: Self.measureFormat(m.format)))
@@ -727,6 +783,7 @@ extension AppState {
                     DataColumn(name: $0.name, type: Self.columnType($0.dataType), expression: $0.expression)
                 }, rows: [])
                 table.rows = []
+                table.expression = spec.calcExpression
                 tables.append(table)
                 calculatedTables.append((spec.name, spec.calcExpression ?? ""))
                 for m in spec.measures {
@@ -797,12 +854,11 @@ extension AppState {
                                               toColumn: r.toColumn, isActive: r.active))
             if r.bothDirections { notes.append(L("Relation %@ → %@ : le filtrage bidirectionnel n'est pas pris en charge (sens unique conservé).", r.fromTable, r.toTable)) }
         }
-        for (name, expr) in calculatedTables {
-            if !fillCalculatedTable(name, expr) {
-                notes.append(L("Table calculée « %@ » : structure importée, données non calculées (seuls GENERATESERIES, CALENDAR et CALENDARAUTO sont pris en charge).", name))
-            }
-        }
+        for (name, expr) in calculatedTables { _ = fillCalculatedTable(name, expr) }
         recomputeCalculatedColumns()
+        for (name, _) in calculatedTables where Engine.table(named: name, in: tables)?.rows.isEmpty ?? false {
+            notes.append(L("Table calculée « %@ » : structure importée, données non calculées (DAX non pris en charge).", name))
+        }
         let invalid = measures.filter { MeasureCompiler.validate($0.expression, home: $0.table, name: $0.name, model) != nil }
         if !invalid.isEmpty {
             notes.append(L("%@ mesure(s) utilisent du DAX non pris en charge : %@", invalid.count, invalid.prefix(6).map(\.name).joined(separator: ", ")))

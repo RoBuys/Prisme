@@ -22,6 +22,9 @@ struct DataGridView: View {
                         Text(src.displayName)
                             .font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
                     }
+                    if t.expression != nil {
+                        Button(L("Modifier la table calculée…")) { state.editTable(t.name) }.controlSize(.small)
+                    }
                     Spacer()
                     transformMenu(t)
                     if t.rows.count > maxRows {

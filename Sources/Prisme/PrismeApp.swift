@@ -80,6 +80,9 @@ struct PrismeApp: App {
                     Button(L("Page affichée en image (PNG)…")) { state.exportPNG() }
                     Button(L("Données du visuel (CSV)…")) { if let id = state.selectedVisualID { state.exportCSV(id) } }
                         .disabled(state.selectedVisualID == nil)
+                    Divider()
+                    Button(L("Modèle Power BI (.pbit)…")) { state.exportPBIT() }
+                        .disabled(state.tables.isEmpty)
                 }
             }
             CommandMenu(L("Visuel")) {

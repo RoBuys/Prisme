@@ -69,6 +69,8 @@ struct DataTable: Identifiable {
     /// Transformation steps, replayed on `base` (the data before the first step; 0 or 1 element).
     var steps: [TransformStep] = []
     var base: [DataTable] = []
+    /// DAX expression of a calculated table (its rows are recomputed from the model).
+    var expression: String?
 
     func columnIndex(_ name: String) -> Int? {
         columns.firstIndex { $0.name == name }
@@ -76,7 +78,7 @@ struct DataTable: Identifiable {
 }
 
 extension DataTable: Codable {
-    private enum CodingKeys: String, CodingKey { case id, name, columns, source, rowCount, data, steps, base }
+    private enum CodingKeys: String, CodingKey { case id, name, columns, source, rowCount, data, steps, base, expression }
 
     /// Column-oriented payload: keeps saved reports compact.
     private struct ColumnPayload: Codable {
@@ -100,6 +102,7 @@ extension DataTable: Codable {
             }
         }
         try c.encode(payloads, forKey: .data)
+        try c.encodeIfPresent(expression, forKey: .expression)
         if !steps.isEmpty {
             try c.encode(steps, forKey: .steps)
             try c.encode(base, forKey: .base)
@@ -127,6 +130,7 @@ extension DataTable: Codable {
         }
         self.rows = rows
         steps = try c.decodeIfPresent([TransformStep].self, forKey: .steps) ?? []
+        expression = try c.decodeIfPresent(String.self, forKey: .expression)
         base = try c.decodeIfPresent([DataTable].self, forKey: .base) ?? []
     }
 }

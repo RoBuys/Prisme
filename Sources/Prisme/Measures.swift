@@ -307,7 +307,59 @@ enum MeasureCompiler {
         "TOPN": 3...4, "DATEDIFF": 3...3, "EOMONTH": 2...2, "DATE": 3...3, "TODAY": 0...0, "FORMAT": 2...2,
         "CONCATENATE": 2...2, "INT": 1...1, "MOD": 2...2, "POWER": 2...2, "SQRT": 1...1, "VALUE": 1...1,
         "COUNTAX": 2...2, "__IN": 1...1000, "MROUND": 2...2, "ROUNDUP": 1...2, "ROUNDDOWN": 1...2,
+        "SUMMARIZE": 1...41, "SUMMARIZECOLUMNS": 1...41, "ADDCOLUMNS": 3...41, "SELECTCOLUMNS": 3...41,
+        "CALCULATETABLE": 1...20, "DISTINCT": 1...1,
     ]
+    /// Functions that return a table.
+    static let tableFunctions: Set<String> = ["FILTER", "VALUES", "DISTINCT", "TOPN", "SUMMARIZE", "SUMMARIZECOLUMNS",
+                                              "ADDCOLUMNS", "SELECTCOLUMNS", "CALCULATETABLE"]
+
+    /// Whether an expression produces a table (used to tell table variables from scalar ones).
+    static func isTableExpr(_ e: Expr, isTableVar: (String) -> Bool, _ m: DataModel) -> Bool {
+        switch e {
+        case .table(let t): return isTableVar(t.lowercased()) || m.table(t) != nil
+        case .call(let f, let a):
+            if tableFunctions.contains(f) { return true }
+            if f == "ALL" && a.count == 1 { return true }
+            if f == "KEEPFILTERS" && a.count == 1 { return isTableExpr(a[0], isTableVar: isTableVar, m) }
+            return false
+        default: return false
+        }
+    }
+
+    /// Names of the columns a table expression adds (ADDCOLUMNS, SUMMARIZE…), as "[name]" keys.
+    static func virtualColumns(_ e: Expr) -> Set<String> {
+        guard case .call(let f, let a) = e, !a.isEmpty else { return [] }
+        var out: Set<String> = []
+        switch f {
+        case "ADDCOLUMNS", "SELECTCOLUMNS", "SUMMARIZE":
+            out = virtualColumns(a[0])
+            for x in a.dropFirst() { if case .string(let n) = x { out.insert("[" + n.lowercased() + "]") } }
+        case "SUMMARIZECOLUMNS":
+            for x in a { if case .string(let n) = x { out.insert("[" + n.lowercased() + "]") } }
+        case "FILTER", "KEEPFILTERS", "CALCULATETABLE", "DISTINCT", "VALUES": out = virtualColumns(a[0])
+        case "TOPN": if a.count > 1 { out = virtualColumns(a[1]) }
+        default: break
+        }
+        return out
+    }
+
+    /// Checks a calculated table expression. Returns nil when it is valid.
+    static func validateTable(_ source: String, _ m: DataModel) -> String? {
+        switch parse(source) {
+        case .failure(let e): return e.message
+        case .success(let e):
+            guard isTableExpr(e, isTableVar: { _ in false }, m) || { if case .letIn = e { return true }; return false }() else {
+                return L("L'expression doit renvoyer une table (SUMMARIZE, ADDCOLUMNS, FILTER, VALUES…).")
+            }
+            do {
+                try check(.call("COUNTROWS", [e]), home: m.tables.first?.name ?? "", m, visiting: [], inCalculateFilter: false)
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }
+    }
     static let aggregations: Set<String> = ["SUM", "AVERAGE", "COUNT", "COUNTA", "DISTINCTCOUNT"]
     static let filterModifiers: Set<String> = ["ALL", "ALLSELECTED", "REMOVEFILTERS", "ALLEXCEPT"]
     static let iterators: Set<String> = ["SUMX", "AVERAGEX", "MINX", "MAXX", "COUNTX", "COUNTAX"]
@@ -361,43 +413,112 @@ enum MeasureCompiler {
             case nil: throw MeasureError(message: L("Colonne introuvable : %@[%@]", t ?? "", n))
             }
         }
-        /// Expressions that produce a table: Table, ALL(Table or column), VALUES(column), FILTER(…), TOPN(…).
+        func subWith(_ x: Expr, _ extra: Set<String>) throws {
+            try check(x, home: home, m, visiting: visiting, inCalculateFilter: false, vars: vars.union(extra))
+        }
+        func pairs(_ a: [Expr], from start: Int, _ f: String, extra: Set<String>) throws {
+            var i = start
+            while i < a.count {
+                guard case .string = a[i], i + 1 < a.count else {
+                    throw MeasureError(message: L("%@ attend des paires \"nom\", expression.", f))
+                }
+                try subWith(a[i + 1], extra)
+                i += 2
+            }
+        }
+        /// Expressions that produce a table: Table, ALL(Table or column), VALUES / DISTINCT, FILTER, TOPN,
+        /// SUMMARIZE, SUMMARIZECOLUMNS, ADDCOLUMNS, SELECTCOLUMNS, CALCULATETABLE, table variables.
         func tableArg(_ x: Expr, _ f: String) throws {
             switch x {
             case .table(let t):
+                if vars.contains("#" + t.lowercased()) { return }
                 guard m.table(t) != nil else { throw MeasureError(message: L("Table introuvable : %@", t)) }
             case .call("ALL", let a) where a.count == 1:
                 if case .ref = a[0] { try columnArg(a[0], "ALL"); return }
                 guard case .table(let t) = a[0], m.table(t) != nil else { throw MeasureError(message: L("%@ attend une table.", "ALL")) }
-            case .call("VALUES", let a) where a.count == 1:
-                try columnArg(a[0], "VALUES")
+            case .call("VALUES", let a) where a.count == 1, .call("DISTINCT", let a) where a.count == 1:
+                if case .ref = a[0] { try columnArg(a[0], "VALUES") } else { try tableArg(a[0], f) }
             case .call("KEEPFILTERS", let a) where a.count == 1:
                 try tableArg(a[0], f)
             case .call("TOPN", let a) where a.count >= 3:
                 try sub(a[0])
                 try tableArg(a[1], "TOPN")
-                try sub(a[2])
+                try subWith(a[2], virtualColumns(a[1]))
             case .call("FILTER", let a) where a.count == 2:
                 try tableArg(a[0], "FILTER")
-                try sub(a[1])
+                try subWith(a[1], virtualColumns(a[0]))
+            case .call("CALCULATETABLE", let a) where !a.isEmpty:
+                try tableArg(a[0], "CALCULATETABLE")
+                for b in a.dropFirst() { try filterArg(b) }
+            case .call(let g, let a) where (g == "ADDCOLUMNS" || g == "SELECTCOLUMNS") && a.count >= 3:
+                try tableArg(a[0], g)
+                try pairs(a, from: 1, g, extra: virtualColumns(a[0]))
+            case .call("SUMMARIZE", let a) where !a.isEmpty:
+                try tableArg(a[0], "SUMMARIZE")
+                var i = 1
+                while i < a.count, case .ref = a[i] { try columnArg(a[i], "SUMMARIZE"); i += 1 }
+                try pairs(a, from: i, "SUMMARIZE", extra: virtualColumns(a[0]))
+            case .call("SUMMARIZECOLUMNS", let a):
+                var i = 0
+                while i < a.count {
+                    switch a[i] {
+                    case .ref: try columnArg(a[i], "SUMMARIZECOLUMNS"); i += 1
+                    case .string: try pairs(a, from: i, "SUMMARIZECOLUMNS", extra: []); i = a.count
+                    default: try filterArg(a[i]); i += 1
+                    }
+                }
             default:
                 throw MeasureError(message: L("%@ attend une table, par exemple %@(Ventes, …).", f, f))
+            }
+        }
+        func filterArg(_ a: Expr) throws {
+            switch a {
+            case .call(let g, _) where filterModifiers.contains(g) || dateFilters.contains(g):
+                try check(a, home: home, m, visiting: visiting, inCalculateFilter: true, vars: vars)
+            case .call(let g, _) where tableFunctions.contains(g):
+                try tableArg(a, "FILTER")
+            case .table(let t) where vars.contains("#" + t.lowercased()):
+                return
+            case .call("KEEPFILTERS", let k) where k.count == 1:
+                try filterArg(k[0])
+            case .call("USERELATIONSHIP", let k) where k.count == 2:
+                try columnArg(k[0], "USERELATIONSHIP")
+                try columnArg(k[1], "USERELATIONSHIP")
+            case .call("__IN", let k) where k.count >= 1:
+                guard case .ref(let t, let n) = k[0], case .column = resolve(table: t, name: n, home: home, m) else {
+                    throw MeasureError(message: L("Le filtre de CALCULATE doit porter sur une colonne."))
+                }
+                for x in k.dropFirst() { try sub(x) }
+            case .binary(let op, .ref(let t, let n), let v) where ["=", "<>", "<", "<=", ">", ">="].contains(op):
+                guard case .column = resolve(table: t, name: n, home: home, m) else {
+                    throw MeasureError(message: L("Le filtre de CALCULATE doit porter sur une colonne."))
+                }
+                try sub(v)
+            default:
+                throw MeasureError(message: L("Filtre de CALCULATE non pris en charge. Utilisez Table[Colonne] = valeur, une comparaison, FILTER(…), ALL(…), ALLSELECTED(…), REMOVEFILTERS(…) ou une fonction de dates."))
             }
         }
 
         switch e {
         case .number, .string, .bool, .blank: return
         case .table(let t):
-            if vars.contains(t.lowercased()) { return }
+            if vars.contains(t.lowercased()) || vars.contains("#" + t.lowercased()) { return }
             guard m.table(t) != nil else { throw MeasureError(message: L("Table introuvable : %@", t)) }
         case .letIn(let defs, let body):
             var scope = vars
             for (name, value) in defs {
-                try check(value, home: home, m, visiting: visiting, inCalculateFilter: false, vars: scope)
-                scope.insert(name.lowercased())
+                if isTableExpr(value, isTableVar: { scope.contains("#" + $0) }, m) {
+                    try check(.call("COUNTROWS", [value]), home: home, m, visiting: visiting, inCalculateFilter: false, vars: scope)
+                    scope.insert("#" + name.lowercased())
+                    scope.formUnion(virtualColumns(value))
+                } else {
+                    try check(value, home: home, m, visiting: visiting, inCalculateFilter: false, vars: scope)
+                    scope.insert(name.lowercased())
+                }
             }
             try check(body, home: home, m, visiting: visiting, inCalculateFilter: false, vars: scope)
         case .ref(let t, let n):
+            if vars.contains("[" + n.lowercased() + "]") && (t == nil || resolve(table: t, name: n, home: home, m) == nil) { return }
             guard let r = resolve(table: t, name: n, home: home, m) else {
                 throw MeasureError(message: t.map { L("Colonne ou mesure introuvable : %@[%@]", $0, n) } ?? L("Colonne ou mesure introuvable : [%@]", n))
             }
@@ -424,7 +545,7 @@ enum MeasureCompiler {
                 return
             }
             if f == "COUNTROWS" { try tableArg(args[0], f); return }
-            if f == "VALUES" || f == "TOPN" {
+            if f == "VALUES" || f == "TOPN" || (tableFunctions.contains(f) && f != "FILTER") {
                 throw MeasureError(message: L("%@ renvoie une table : utilisez-le dans COUNTROWS, SUMX, RANKX ou CALCULATE.", f))
             }
             if f == "SELECTEDVALUE" || f == "HASONEVALUE" || f == "ISFILTERED" {
@@ -434,7 +555,7 @@ enum MeasureCompiler {
             }
             if f == "RANKX" {
                 try tableArg(args[0], f)
-                try sub(args[1])
+                try subWith(args[1], virtualColumns(args[0]))
                 if args.count > 2 { try sub(args[2]) }
                 if args.count > 3 {
                     guard case .table(let o) = args[3], ["ASC", "DESC"].contains(o.uppercased()) else {
@@ -463,7 +584,7 @@ enum MeasureCompiler {
             }
             if iterators.contains(f) {
                 try tableArg(args[0], f)
-                try sub(args[1])
+                try subWith(args[1], virtualColumns(args[0]))
                 return
             }
             if f == "FILTER" {
@@ -506,31 +627,6 @@ enum MeasureCompiler {
             }
             if f == "CALCULATE" {
                 try sub(args[0])
-                func filterArg(_ a: Expr) throws {
-                    switch a {
-                    case .call(let g, _) where filterModifiers.contains(g) || dateFilters.contains(g):
-                        try check(a, home: home, m, visiting: visiting, inCalculateFilter: true, vars: vars)
-                    case .call("FILTER", _), .call("VALUES", _), .call("TOPN", _):
-                        try tableArg(a, "FILTER")
-                    case .call("KEEPFILTERS", let k) where k.count == 1:
-                        try filterArg(k[0])
-                    case .call("USERELATIONSHIP", let k) where k.count == 2:
-                        try columnArg(k[0], "USERELATIONSHIP")
-                        try columnArg(k[1], "USERELATIONSHIP")
-                    case .call("__IN", let k) where k.count >= 1:
-                        guard case .ref(let t, let n) = k[0], case .column = resolve(table: t, name: n, home: home, m) else {
-                            throw MeasureError(message: L("Le filtre de CALCULATE doit porter sur une colonne."))
-                        }
-                        for x in k.dropFirst() { try sub(x) }
-                    case .binary(let op, .ref(let t, let n), let v) where ["=", "<>", "<", "<=", ">", ">="].contains(op):
-                        guard case .column = resolve(table: t, name: n, home: home, m) else {
-                            throw MeasureError(message: L("Le filtre de CALCULATE doit porter sur une colonne."))
-                        }
-                        try sub(v)
-                    default:
-                        throw MeasureError(message: L("Filtre de CALCULATE non pris en charge. Utilisez Table[Colonne] = valeur, une comparaison, FILTER(…), ALL(…), ALLSELECTED(…), REMOVEFILTERS(…) ou une fonction de dates."))
-                    }
-                }
                 for a in args.dropFirst() { try filterArg(a) }
                 return
             }
@@ -635,9 +731,11 @@ struct RowContext {
     let row: Int
     /// Rows of the query's base table that belong to this row (used for context transition).
     let baseRows: [Int]
-    /// Filter context the row was produced in, and the filter that stands for "this row" in a context transition.
+    /// Filter context the row was produced in, and the filters that stand for "this row" in a context transition.
     var filters: [FilterSpec] = []
-    var transition: FilterSpec?
+    var transitions: [FilterSpec] = []
+    /// Values of the columns added by ADDCOLUMNS / SUMMARIZE…, keyed by lowercased name.
+    var values: [String: MValue] = [:]
 }
 
 /// Rows produced by a table expression, with what's needed to evaluate measures for each of them.
@@ -648,9 +746,17 @@ struct TableRows {
     /// Base rows and filters of the context the table was taken in.
     var baseRows: [Int]
     var filters: [FilterSpec]
-    /// Distinct-value tables (VALUES, ALL(column)): representative row → base rows and transition filter.
+    /// Grouped tables (VALUES, ALL(column), SUMMARIZE): representative row → base rows and transition filters.
     var groups: [Int: [Int]]?
-    var transitions: [Int: FilterSpec]?
+    var transitions: [Int: [FilterSpec]]?
+    /// Grouped tables: representative row → rows of `table` in the group.
+    var sources: [Int: [Int]]?
+    /// Added columns (ADDCOLUMNS, SUMMARIZE…): row → values by lowercased name; names in order.
+    var extras: [Int: [String: MValue]]?
+    var extraNames: [String] = []
+    /// Columns of a grouped table; `selectOnly` keeps only the added columns (SELECTCOLUMNS).
+    var groupBy: [FieldRef]?
+    var selectOnly = false
 }
 
 /// Evaluates measures over sets of base rows, within a filter context.
@@ -659,8 +765,14 @@ final class MeasureEvaluator {
     let model: DataModel
     private var rowCache: [String: [Int]] = [:]
     private var tableContexts: [String: QueryContext] = [:]
-    /// VAR scopes (innermost last).
+    /// VAR scopes (innermost last), for scalar and table variables.
     private var scopes: [[String: MValue]] = []
+    private var tableScopes: [[String: TableRows]] = []
+
+    private func tableVar(_ name: String) -> TableRows? {
+        for scope in tableScopes.reversed() { if let t = scope[name.lowercased()] { return t } }
+        return nil
+    }
 
     init(ctx: QueryContext, model: DataModel) {
         self.ctx = ctx
@@ -731,19 +843,26 @@ final class MeasureEvaluator {
             throw MeasureError(message: L("Une table ne peut pas être utilisée comme valeur."))
         case .letIn(let defs, let body):
             scopes.append([:])
-            defer { scopes.removeLast() }
+            tableScopes.append([:])
+            defer { scopes.removeLast(); tableScopes.removeLast() }
             for (name, value) in defs {
-                scopes[scopes.count - 1][name.lowercased()] = try eval(value, home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+                if MeasureCompiler.isTableExpr(value, isTableVar: { self.tableVar($0) != nil }, model) {
+                    tableScopes[tableScopes.count - 1][name.lowercased()] =
+                        try tableRows(value, home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+                } else {
+                    scopes[scopes.count - 1][name.lowercased()] = try eval(value, home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+                }
             }
             return try eval(body, home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
         case .ref(let t, let n):
+            if let v = row?.values[n.lowercased()] { return v }
             switch MeasureCompiler.resolve(table: t, name: n, home: home, model) {
             case .measure(let me):
                 guard case .success(let inner) = MeasureCompiler.parse(me.expression) else { return .blank }
                 if let rc = row {
                     // Context transition: the measure sees only the current row.
-                    let t = rc.transition ?? FilterSpec(field: FieldRef(table: rc.table, column: ""), allowed: [], rowSet: [rc.row])
-                    let f = (rc.filters.isEmpty ? filters : rc.filters) + [t]
+                    let t = rc.transitions.isEmpty ? [FilterSpec(field: FieldRef(table: rc.table, column: ""), allowed: [], rowSet: [rc.row])] : rc.transitions
+                    let f = (rc.filters.isEmpty ? filters : rc.filters) + t
                     return try eval(inner, home: me.table, rows: rc.baseRows, filters: f, row: nil, depth: depth + 1)
                 }
                 return try eval(inner, home: me.table, rows: rows, filters: filters, row: nil, depth: depth + 1)
@@ -823,8 +942,95 @@ final class MeasureEvaluator {
     }
 
     func rowContext(_ t: TableRows, _ r: Int) -> RowContext {
-        let base = t.groups?[r] ?? baseRowsByRow(t.table, t.baseRows)[r] ?? []
-        return RowContext(table: t.table, row: r, baseRows: base, filters: t.filters, transition: t.transitions?[r])
+        let base = t.groups?[r] ?? (t.table == ctx.base.name ? [r] : baseRowsByRow(t.table, t.baseRows)[r] ?? [])
+        return RowContext(table: t.table, row: r, baseRows: base, filters: t.filters, transitions: t.transitions?[r] ?? [],
+                          values: t.extras?[r] ?? [:])
+    }
+
+    /// A column reference with the table's own spelling of the column name.
+    private func canonical(_ f: FieldRef) -> FieldRef {
+        guard let t = model.table(f.table), let c = t.columns.first(where: { $0.name.caseInsensitiveEquals(f.column) }) else { return f }
+        return FieldRef(table: f.table, column: c.name)
+    }
+
+    /// `"name", expression` pairs starting at `start`.
+    private func namedPairs(_ a: [Expr], from start: Int) -> [(String, Expr)] {
+        stride(from: start, to: a.count - 1, by: 2).compactMap { i in
+            if case .string(let n) = a[i] { return (n, a[i + 1]) }
+            return nil
+        }
+    }
+
+    /// SUMMARIZE: one row per distinct combination of the group columns; added columns are evaluated in each
+    /// group's filter context.
+    private func summarize(_ src: TableRows, by columns: [FieldRef], pairs: [(String, Expr)], home: String, depth: Int) throws -> TableRows {
+        let cols = columns.map(canonical)
+        var reps: [String: Int] = [:]
+        var order: [Int] = []
+        var groups: [Int: [Int]] = [:], sources: [Int: [Int]] = [:]
+        var transitions: [Int: [FilterSpec]] = [:]
+        for r in src.rows {
+            let rc = rowContext(src, r)
+            let labels = try cols.map { GroupKey.of(try cellValue($0, rc).cell, nil).label }
+            let key = labels.joined(separator: "\u{1F}")
+            if let rep = reps[key] {
+                groups[rep]!.append(contentsOf: rc.baseRows)
+                sources[rep]!.append(r)
+                continue
+            }
+            reps[key] = r
+            order.append(r)
+            groups[r] = rc.baseRows
+            sources[r] = [r]
+            transitions[r] = zip(cols, labels).map { FilterSpec(field: $0, allowed: [$1]) }
+        }
+        var extras: [Int: [String: MValue]] = [:]
+        for r in order {
+            var values: [String: MValue] = [:]
+            for (n, x) in pairs {
+                values[n.lowercased()] = try eval(x, home: home, rows: groups[r] ?? [], filters: src.filters + (transitions[r] ?? []),
+                                                  row: nil, depth: depth + 1)
+            }
+            extras[r] = values
+        }
+        return TableRows(table: src.table, rows: order, baseRows: src.baseRows, filters: src.filters, groups: groups,
+                         transitions: transitions, sources: sources, extras: extras, extraNames: pairs.map(\.0), groupBy: cols)
+    }
+
+    /// Filter context after CALCULATE-style filter arguments (filter removers apply first, as in DAX).
+    private func contextFilters(_ filterArgs: [Expr], home: String, rows: [Int], filters: [FilterSpec], row: RowContext?,
+                                depth: Int) throws -> [FilterSpec] {
+        var newFilters = filters
+        let isModifier: (Expr) -> Bool = { if case .call(let g, _) = $0 { return MeasureCompiler.filterModifiers.contains(g) }; return false }
+        for a in filterArgs.filter(isModifier) + filterArgs.filter({ !isModifier($0) }) {
+            newFilters = try applyFilter(a, to: newFilters, home: home, rows: rows, filters: filters, row: row, depth: depth)
+        }
+        return newFilters
+    }
+
+    /// Evaluates a calculated table over the whole model: column names and rows.
+    func evaluateTable(_ e: Expr) throws -> (columns: [String], rows: [[MValue]]) {
+        let all = rows(for: [])
+        let t = try tableRows(e, home: ctx.base.name, rows: all, filters: [], row: nil, depth: 0)
+        var cols: [(String, FieldRef?)] = []
+        if let g = t.groupBy {
+            cols = g.map { ($0.column, $0) }
+        } else if !t.selectOnly, let table = model.table(t.table) {
+            cols = table.columns.map { ($0.name, FieldRef(table: t.table, column: $0.name)) }
+        }
+        if t.selectOnly { cols = [] }
+        cols += t.extraNames.map { ($0, nil) }
+        var seen = Set<String>()
+        cols = cols.filter { seen.insert($0.0.lowercased()).inserted }
+        let out = try t.rows.map { r -> [MValue] in
+            let rc = rowContext(t, r)
+            return try cols.map { c in
+                if let v = rc.values[c.0.lowercased()], c.1 == nil || t.groupBy == nil { return v }
+                guard let f = c.1 else { return .blank }
+                return try cellValue(f, rc)
+            }
+        }
+        return (cols.map(\.0), out)
     }
 
     /// Rows produced by a table expression: Table (rows in the current filter context), ALL(Table or column),
@@ -832,6 +1038,8 @@ final class MeasureEvaluator {
     private func tableRows(_ e: Expr, home: String, rows: [Int], filters: [FilterSpec], row: RowContext?,
                            depth: Int) throws -> TableRows {
         switch e {
+        case .table(let t) where tableVar(t) != nil:
+            return tableVar(t)!
         case .table(let t):
             guard let table = model.table(t) else { throw MeasureError(message: L("Table introuvable : %@", t)) }
             return TableRows(table: t, rows: ctx.relatedRows(t, rows) ?? Array(table.rows.indices), baseRows: rows, filters: filters)
@@ -844,8 +1052,57 @@ final class MeasureEvaluator {
             guard case .table(let t) = a[0], let table = model.table(t) else { throw MeasureError(message: L("%@ attend une table.", "ALL")) }
             let f2 = withoutFilters(on: t, filters)
             return TableRows(table: t, rows: Array(table.rows.indices), removesFilters: true, baseRows: self.rows(for: f2), filters: f2)
-        case .call("VALUES", let a) where a.count == 1:
+        case .call("VALUES", let a) where a.count == 1, .call("DISTINCT", let a) where a.count == 1:
+            guard case .ref = a[0] else { return try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1) }
             return try distinctRows(try column(a[0], home: home), baseRows: rows, filters: filters, removes: false)
+        case .call("CALCULATETABLE", let a) where !a.isEmpty:
+            let nf = try contextFilters(Array(a.dropFirst()), home: home, rows: rows, filters: filters, row: row, depth: depth)
+            return try tableRows(a[0], home: home, rows: self.rows(for: nf), filters: nf, row: nil, depth: depth + 1)
+        case .call(let g, let a) where (g == "ADDCOLUMNS" || g == "SELECTCOLUMNS") && a.count >= 3:
+            var t = try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+            let pairs = namedPairs(a, from: 1)
+            var extras = t.extras ?? [:]
+            for r in t.rows {
+                let rc = rowContext(t, r)
+                var values = g == "SELECTCOLUMNS" ? [:] : rc.values
+                for (n, x) in pairs {
+                    values[n.lowercased()] = try eval(x, home: home, rows: rows, filters: filters, row: rc, depth: depth + 1)
+                }
+                extras[r] = values
+            }
+            t.extras = extras
+            if g == "SELECTCOLUMNS" {
+                t.extraNames = pairs.map(\.0)
+                t.selectOnly = true
+            } else {
+                t.extraNames += pairs.map(\.0)
+            }
+            return t
+        case .call("SUMMARIZE", let a) where !a.isEmpty:
+            let src = try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+            var i = 1
+            var cols: [FieldRef] = []
+            while i < a.count, case .ref = a[i] { cols.append(try column(a[i], home: home)); i += 1 }
+            return try summarize(src, by: cols, pairs: namedPairs(a, from: i), home: home, depth: depth)
+        case .call("SUMMARIZECOLUMNS", let a):
+            var cols: [FieldRef] = [], filterArgs: [Expr] = []
+            var i = 0
+            while i < a.count {
+                if case .ref = a[i] { cols.append(try column(a[i], home: home)); i += 1; continue }
+                if case .string = a[i] { break }
+                filterArgs.append(a[i])
+                i += 1
+            }
+            let pairs = namedPairs(a, from: i)
+            let nf = try contextFilters(filterArgs, home: home, rows: rows, filters: filters, row: row, depth: depth)
+            let base = self.rows(for: nf)
+            var t = try summarize(TableRows(table: ctx.base.name, rows: base, baseRows: base, filters: nf),
+                                  by: cols, pairs: pairs, home: home, depth: depth)
+            // Like SUMMARIZECOLUMNS, drop the groups where every added column is blank.
+            if !pairs.isEmpty {
+                t.rows = t.rows.filter { r in pairs.contains { !(t.extras?[r]?[$0.0.lowercased()]?.isBlank ?? true) } }
+            }
+            return t
         case .call("KEEPFILTERS", let a) where a.count == 1:
             return try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
         case .call("FILTER", let a) where a.count == 2:
@@ -876,7 +1133,7 @@ final class MeasureEvaluator {
         var reps: [String: Int] = [:]
         var order: [Int] = []
         var groups: [Int: [Int]] = [:]
-        var transitions: [Int: FilterSpec] = [:]
+        var transitions: [Int: [FilterSpec]] = [:]
         for b in baseRows {
             let label = GroupKey.of(get(b), nil).label
             if let r = reps[label] { groups[r]!.append(b); continue }
@@ -884,10 +1141,10 @@ final class MeasureEvaluator {
             reps[label] = r
             order.append(r)
             groups[r] = [b]
-            transitions[r] = FilterSpec(field: FieldRef(table: fr.table, column: table.columns[ci].name), allowed: [label])
+            transitions[r] = [FilterSpec(field: FieldRef(table: fr.table, column: table.columns[ci].name), allowed: [label])]
         }
         return TableRows(table: fr.table, rows: order, removesFilters: removes, baseRows: baseRows, filters: filters,
-                         groups: groups, transitions: transitions)
+                         groups: groups, transitions: transitions, groupBy: [FieldRef(table: fr.table, column: table.columns[ci].name)])
     }
 
     private func call(_ f: String, _ args: [Expr], home: String, rows: [Int], filters: [FilterSpec], row: RowContext?,
@@ -926,16 +1183,12 @@ final class MeasureEvaluator {
                 }
                 let child = MeasureEvaluator(ctx: QueryContext(base: ctx.base, model: m2), model: m2)
                 child.scopes = scopes
+                child.tableScopes = tableScopes
                 let rest = filterArgs.filter { if case .call("USERELATIONSHIP", _) = $0 { return false }; return true }
                 return try child.call("CALCULATE", [expr] + rest, home: home, rows: child.rows(for: filters), filters: filters,
                                       row: nil, depth: depth + 1)
             }
-            var newFilters = filters
-            // As in DAX, filter removers (ALL…) apply before the new filters, whatever their order.
-            let isModifier: (Expr) -> Bool = { if case .call(let g, _) = $0 { return MeasureCompiler.filterModifiers.contains(g) }; return false }
-            for a in filterArgs.filter(isModifier) + filterArgs.filter({ !isModifier($0) }) {
-                newFilters = try applyFilter(a, to: newFilters, home: home, rows: rows, filters: filters, row: row, depth: depth)
-            }
+            let newFilters = try contextFilters(filterArgs, home: home, rows: rows, filters: filters, row: row, depth: depth)
             return try eval(expr, home: home, rows: self.rows(for: newFilters), filters: newFilters, row: nil, depth: depth + 1)
         }
 
@@ -1158,13 +1411,18 @@ final class MeasureEvaluator {
             let keep = Set(t.rows.indices.filter { compare(MValue(t.rows[$0][ci]), v, op) })
             return current.filter { $0.field.columnKey != fr.columnKey }
                 + [FilterSpec(field: FieldRef(table: fr.table, column: fr.column), allowed: [], rowSet: keep)]
-        case .call("FILTER", _), .call("VALUES", _), .call("TOPN", _):
+        case .call(let g, _) where MeasureCompiler.tableFunctions.contains(g),
+             .table(let g) where tableVar(g) != nil:
             let t = try tableRows(a, home: home, rows: rows, filters: filters, row: row, depth: depth)
             let base = t.removesFilters ? current.filter { $0.field.table != t.table } : current
+            if let sources = t.sources {
+                return base + [FilterSpec(field: FieldRef(table: t.table, column: ""), allowed: [],
+                                          rowSet: Set(t.rows.flatMap { sources[$0] ?? [] }))]
+            }
             if let groups = t.groups {
                 // Distinct-value tables filter on the values themselves.
-                let labels = Set(t.rows.compactMap { t.transitions?[$0]?.allowed.first })
-                if let f = t.rows.first.flatMap({ t.transitions?[$0]?.field }) {
+                let labels = Set(t.rows.compactMap { t.transitions?[$0]?.first?.allowed.first })
+                if let f = t.rows.first.flatMap({ t.transitions?[$0]?.first?.field }) {
                     _ = groups
                     return base.filter { $0.field.columnKey != f.columnKey } + [FilterSpec(field: f, allowed: labels.isEmpty ? [GroupKey.blankLabel + "\u{0}"] : labels)]
                 }

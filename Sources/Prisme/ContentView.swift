@@ -155,6 +155,8 @@ struct RibbonView: View {
                     .disabled(state.tables.isEmpty)
                 RibbonButton(L("Nouvelle colonne"), "tablecells.badge.ellipsis") { state.newColumn() }
                     .disabled(state.tables.isEmpty)
+                RibbonButton(L("Nouvelle table"), "tablecells.badge.plus") { state.newTable() }
+                    .disabled(state.tables.isEmpty)
             }
             RibbonDivider()
             RibbonGroup(L("Insérer")) {
@@ -190,6 +192,8 @@ struct RibbonView: View {
             RibbonGroup(L("Exporter")) {
                 RibbonButton(L("PDF"), "doc.richtext") { state.exportPDF() }
                 RibbonButton(L("Image"), "photo") { state.exportPNG() }
+                RibbonButton(L("Power BI"), "square.and.arrow.up") { state.exportPBIT() }
+                    .disabled(state.tables.isEmpty)
             }
             .disabled(state.mode != .report)
             RibbonDivider()

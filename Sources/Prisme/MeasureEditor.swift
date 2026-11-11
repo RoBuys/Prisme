@@ -42,27 +42,34 @@ struct MeasureEditor: View {
         ("LOOKUPVALUE", L("LOOKUPVALUE(Table[Résultat], Table[Clé], \"valeur\")"), L("Recherche une valeur")),
         ("DATEDIFF", L("DATEDIFF(DATE(2024, 1, 1), TODAY(), MONTH)"), L("Écart entre deux dates")),
         ("FORMAT", L("FORMAT([Mesure], \"#,##0.00\")"), L("Met en forme un nombre ou une date")),
+        ("SUMMARIZE", L("SUMMARIZE(Table, Table[Colonne], \"Total\", [Mesure])"), L("Table regroupée (avec colonnes calculées)")),
+        ("ADDCOLUMNS", L("ADDCOLUMNS(VALUES(Table[Colonne]), \"Total\", [Mesure])"), L("Ajoute des colonnes à une table")),
+        ("CALCULATETABLE", L("CALCULATETABLE(Table, Table[Colonne] = \"valeur\")"), L("Table dans un autre contexte de filtre")),
+        ("VAR table", L("VAR t = FILTER(Table, Table[Colonne] > 100)\nRETURN COUNTROWS(t)"), L("Variable contenant une table")),
     ] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(draft.isColumn ? (draft.originalName == nil ? L("Nouvelle colonne calculée") : L("Modifier la colonne calculée"))
+            Text(draft.isTable ? (draft.originalName == nil ? L("Nouvelle table calculée") : L("Modifier la table calculée"))
+                 : draft.isColumn ? (draft.originalName == nil ? L("Nouvelle colonne calculée") : L("Modifier la colonne calculée"))
                  : (draft.id == nil ? L("Nouvelle mesure") : L("Modifier la mesure"))).font(.title3.weight(.semibold))
             HStack(spacing: 12) {
                 TextField(L("Nom"), text: $draft.name).textFieldStyle(.roundedBorder).frame(width: 220)
-                Picker(L("Table"), selection: $draft.table) {
-                    ForEach(state.tables) { Text($0.name).tag($0.name) }
+                if !draft.isTable {
+                    Picker(L("Table"), selection: $draft.table) {
+                        ForEach(state.tables) { Text($0.name).tag($0.name) }
+                    }
+                    .frame(width: 200)
+                    .disabled(draft.isColumn && draft.originalName != nil)
                 }
-                .frame(width: 200)
-                .disabled(draft.isColumn && draft.originalName != nil)
-                if !draft.isColumn {
+                if !draft.isColumn && !draft.isTable {
                     Picker(L("Format"), selection: $draft.format) {
                         ForEach(MeasureFormat.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
                     .frame(width: 210)
                 }
             }
-            if !draft.isColumn {
+            if !draft.isColumn && !draft.isTable {
                 DisclosureGroup(L("Mesures rapides"), isExpanded: $showQuick) { quickMeasures }
                     .font(.system(size: 12))
             }
@@ -80,7 +87,7 @@ struct MeasureEditor: View {
                             Text(preview.dropFirst(2)).foregroundStyle(.secondary)
                         } else if !draft.expression.isEmpty {
                             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                            Text(draft.isColumn ? L("Premières valeurs : ") : L("Valeur sur toutes les données : ")).foregroundStyle(.secondary)
+                            Text(draft.isTable ? L("Résultat : ") : draft.isColumn ? L("Premières valeurs : ") : L("Valeur sur toutes les données : ")).foregroundStyle(.secondary)
                             Text(preview).fontWeight(.semibold)
                         }
                     }
@@ -116,6 +123,9 @@ struct MeasureEditor: View {
             HStack {
                 if let id = draft.id, let m = state.measures.first(where: { $0.id == id }) {
                     Button(L("Supprimer"), role: .destructive) { state.deleteMeasure(m); dismiss() }
+                }
+                if draft.isTable, let old = draft.originalName {
+                    Button(L("Supprimer"), role: .destructive) { state.deleteTable(old); dismiss() }
                 }
                 if draft.isColumn, let old = draft.originalName {
                     Button(L("Supprimer"), role: .destructive) { state.deleteColumn(table: draft.table, column: old); dismiss() }
