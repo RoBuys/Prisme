@@ -274,7 +274,7 @@ struct StepsPane: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         Image(systemName: "tray.and.arrow.down").frame(width: 16)
-                        Text(table.source.map { URL(fileURLWithPath: $0.path).lastPathComponent } ?? L("Source"))
+                        Text(table.source?.displayName ?? L("Source"))
                             .lineLimit(1)
                     }
                     .font(.system(size: 11))

@@ -14,13 +14,19 @@ struct ImportError: LocalizedError {
 }
 
 enum Importer {
-    static let supportedExtensions = ["csv", "tsv", "txt", "xlsx", "xlsm"]
+    static let supportedExtensions = ["csv", "tsv", "txt", "xlsx", "xlsm", "json"]
 
     /// Loads every table contained in a file (one per Excel sheet).
     static func load(_ url: URL) throws -> [DataTable] {
         let ext = url.pathExtension.lowercased()
         let base = url.deletingPathExtension().lastPathComponent
         switch ext {
+        case "json":
+            let grid = try JSONReader.grid(try Data(contentsOf: url), path: nil)
+            guard let t = makeTable(name: base, grid: grid, source: DataSource(path: url.path)) else {
+                throw ImportError(message: L("Le fichier « %@ » ne contient aucune donnée.", url.lastPathComponent))
+            }
+            return [t]
         case "csv", "tsv", "txt":
             let grid = try readCSV(url)
             guard let t = makeTable(name: base, grid: grid, source: DataSource(path: url.path)) else {

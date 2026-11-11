@@ -99,6 +99,9 @@ struct ContentView: View {
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
         }
+        .sheet(isPresented: Binding(get: { state.showGetData }, set: { state.showGetData = $0 })) {
+            GetDataView().environment(state)
+        }
         .sheet(item: Binding(get: { state.measureDraft }, set: { state.measureDraft = $0 })) { d in
             MeasureEditor(draft: d).environment(state)
         }
@@ -127,7 +130,7 @@ struct RibbonView: View {
             }
             RibbonDivider()
             RibbonGroup(L("Données")) {
-                RibbonButton(L("Obtenir des données"), "cylinder.split.1x2") { state.importWithPanel() }
+                RibbonButton(L("Obtenir des données"), "cylinder.split.1x2") { state.showGetData = true }
                 RibbonButton(L("Exemple"), "sparkles") { state.loadSample() }
                 RibbonButton(L("Actualiser"), "arrow.clockwise") { state.refreshAll() }
                     .disabled(state.tables.isEmpty)

@@ -60,7 +60,8 @@ struct PrismeApp: App {
                 Button(L("Nouveau rapport")) { state.newDocument() }.keyboardShortcut("n")
                 Button(L("Ouvrir…")) { state.openDocument() }.keyboardShortcut("o")
                 Divider()
-                Button(L("Obtenir des données…")) { state.importWithPanel() }.keyboardShortcut("i")
+                Button(L("Obtenir des données…")) { state.showGetData = true }.keyboardShortcut("i")
+                Button(L("Importer un fichier…")) { state.importWithPanel() }.keyboardShortcut("i", modifiers: [.command, .shift])
                 Button(L("Charger les données d'exemple")) { state.loadSample() }
                 Button(L("Actualiser les données")) { state.refreshAll() }.keyboardShortcut("r")
             }

@@ -19,7 +19,7 @@ struct DataGridView: View {
                     Text(L("%@ lignes · %@ colonnes", t.rows.count.formatted(), t.columns.count))
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                     if let src = t.source {
-                        Text(URL(fileURLWithPath: src.path).lastPathComponent + (src.sheet.map { " › \($0)" } ?? ""))
+                        Text(src.displayName)
                             .font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
                     }
                     Spacer()

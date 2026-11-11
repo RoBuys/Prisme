@@ -510,6 +510,28 @@ final class AppState {
         }
     }
 
+    var showGetData = false
+
+    /// Imports a database or web source as a new table (connection secrets go to the Keychain).
+    func importSource(_ source: DataSource, name: String, secret: String?) {
+        if let secret, !secret.isEmpty { Keychain.set(secret, for: source.secretAccount) }
+        isImporting = true
+        let tableName = uniqueTableName(name.isEmpty ? L("Requête") : name)
+        Task { @MainActor in
+            do {
+                let loaded = try await Task.detached(priority: .userInitiated) { try Importer.load(source: source, name: tableName) }.value
+                tables += loaded
+                if dataTableName == nil { dataTableName = loaded.first?.name }
+                detectRelationships(for: loaded.map(\.name))
+                didChange()
+                showGetData = false
+            } catch {
+                alertMessage = error.localizedDescription
+            }
+            isImporting = false
+        }
+    }
+
     func refreshAll() {
         let sources = tables.compactMap { t in t.source.map { (t.name, $0) } }
         guard !sources.isEmpty else {
@@ -521,13 +543,12 @@ final class AppState {
             var updates: [String: DataTable] = [:]
             var errors: [String] = []
             for (name, src) in sources {
-                let url = URL(fileURLWithPath: src.path)
                 do {
-                    let loaded = try await Task.detached(priority: .userInitiated) { try Importer.load(url) }.value
+                    let loaded = try await Task.detached(priority: .userInitiated) { try Importer.load(source: src, name: name) }.value
                     if let t = loaded.first(where: { src.sheet == nil || $0.source?.sheet == src.sheet }) {
                         updates[name] = t
                     } else {
-                        errors.append(L("« %@ » : feuille introuvable dans %@.", name, url.lastPathComponent))
+                        errors.append(L("« %@ » : feuille introuvable dans %@.", name, src.displayName))
                     }
                 } catch {
                     errors.append("« \(name) » : \(error.localizedDescription)")

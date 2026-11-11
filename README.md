@@ -9,6 +9,11 @@ import data, then build interactive reports with drag and drop. The interface is
 - **Data import**: CSV / TSV (detects the `,` `;` tab `|` delimiters, French-style numbers such as `1 234,56`,
   UTF-8 or Windows-1252) and Excel `.xlsx` (every sheet, Excel dates recognized). Drop a file on the page or use
   **Obtenir des données** (Get data). **Actualiser** (Refresh) re-reads the source files.
+- **Databases and web sources** (**Obtenir des données** / Get data, ⌘I): **SQLite** (system library), **PostgreSQL**
+  (built-in client: protocol v3, SCRAM-SHA-256 / MD5 / password authentication, optional TLS), **MySQL** (through the
+  `mysql` command-line client, e.g. `brew install mysql-client`) and **web APIs / JSON** (GET with an optional header
+  such as `Authorization`, nested objects flattened to `a.b` columns, optional JSON path). Passwords and tokens are
+  kept in the macOS Keychain; refresh re-runs the query.
 - **Automatic column typing** (number, text, date), editable in the **Données** (Data) view.
 - **Data transformations** (Power Query-like **applied steps**, in the Data view: **Transform** menu or a column
   header): rename, remove, change type, filter rows, replace values, split, trim, fill down, remove duplicates /

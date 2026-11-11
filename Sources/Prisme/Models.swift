@@ -45,8 +45,19 @@ struct DataColumn: Hashable, Codable, Identifiable {
 }
 
 struct DataSource: Hashable, Codable {
-    var path: String
+    var path: String = ""
     var sheet: String?
+    /// nil = file. Databases and web sources keep their connection details (secrets live in the Keychain).
+    var kind: SourceKind?
+    var query: String?
+    var host: String?
+    var port: Int?
+    var database: String?
+    var user: String?
+    var tls: Bool?
+    var url: String?
+    var header: String?
+    var jsonPath: String?
 }
 
 struct DataTable: Identifiable {
