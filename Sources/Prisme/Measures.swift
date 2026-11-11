@@ -47,6 +47,17 @@ private func tokenize(_ source: String) throws -> [Token] {
     while i < chars.count {
         let c = chars[i]
         if c.isWhitespace { i += 1; continue }
+        // Comments: -- … and // … to the end of the line, /* … */ blocks.
+        if (c == "-" && peek(1) == "-") || (c == "/" && peek(1) == "/") {
+            while let d = peek(), d != "\n" { i += 1 }
+            continue
+        }
+        if c == "/" && peek(1) == "*" {
+            i += 2
+            while i < chars.count, !(chars[i] == "*" && peek(1) == "/") { i += 1 }
+            i += 2
+            continue
+        }
         if c.isNumber || (c == "." && peek(1)?.isNumber == true) {
             var s = ""
             while let d = peek(), d.isNumber || d == "." { s.append(d); i += 1 }
@@ -89,6 +100,8 @@ private func tokenize(_ source: String) throws -> [Token] {
         }
         switch c {
         case "(": tokens.append(.lparen); i += 1
+        case "{": tokens.append(.op("{")); i += 1
+        case "}": tokens.append(.op("}")); i += 1
         case ")": tokens.append(.rparen); i += 1
         case ",", ";": tokens.append(.comma); i += 1
         case "+", "-", "*", "/", "!": tokens.append(.op(String(c))); i += 1
@@ -158,11 +171,28 @@ private struct Parser {
 
     mutating func parseComparison() throws -> Expr {
         var l = try parseAdditive()
-        while case .op(let o) = current, ["=", "<>", "<", "<=", ">", ">="].contains(o) {
-            advance()
-            l = .binary(o, l, try parseAdditive())
+        while true {
+            if case .op(let o) = current, ["=", "<>", "<", "<=", ">", ">="].contains(o) {
+                advance()
+                l = .binary(o, l, try parseAdditive())
+            } else if case .ident(let kw) = current, kw.uppercased() == "IN" {
+                // x IN { a, b, … }
+                advance()
+                guard current == .op("{") else { throw MeasureError(message: L("« { » attendu après IN.")) }
+                advance()
+                var items: [Expr] = []
+                while current != .op("}") {
+                    items.append(try parseAdditive())
+                    if current == .comma { advance() } else if current != .op("}") {
+                        throw MeasureError(message: L("« } » attendu."))
+                    }
+                }
+                advance()
+                l = .call("__IN", [l] + items)
+            } else {
+                return l
+            }
         }
-        return l
     }
 
     mutating func parseAdditive() throws -> Expr {
@@ -276,10 +306,11 @@ enum MeasureCompiler {
         "ALLEXCEPT": 2...10, "KEEPFILTERS": 1...1, "USERELATIONSHIP": 2...2, "LOOKUPVALUE": 3...21, "RANKX": 2...4,
         "TOPN": 3...4, "DATEDIFF": 3...3, "EOMONTH": 2...2, "DATE": 3...3, "TODAY": 0...0, "FORMAT": 2...2,
         "CONCATENATE": 2...2, "INT": 1...1, "MOD": 2...2, "POWER": 2...2, "SQRT": 1...1, "VALUE": 1...1,
+        "COUNTAX": 2...2, "__IN": 1...1000, "MROUND": 2...2, "ROUNDUP": 1...2, "ROUNDDOWN": 1...2,
     ]
     static let aggregations: Set<String> = ["SUM", "AVERAGE", "COUNT", "COUNTA", "DISTINCTCOUNT"]
     static let filterModifiers: Set<String> = ["ALL", "ALLSELECTED", "REMOVEFILTERS", "ALLEXCEPT"]
-    static let iterators: Set<String> = ["SUMX", "AVERAGEX", "MINX", "MAXX", "COUNTX"]
+    static let iterators: Set<String> = ["SUMX", "AVERAGEX", "MINX", "MAXX", "COUNTX", "COUNTAX"]
     /// Time-intelligence filters, valid as CALCULATE arguments.
     static let dateFilters: Set<String> = ["DATESYTD", "DATESMTD", "DATESQTD", "SAMEPERIODLASTYEAR", "DATEADD",
                                            "PREVIOUSMONTH", "PREVIOUSYEAR"]
@@ -340,6 +371,8 @@ enum MeasureCompiler {
                 guard case .table(let t) = a[0], m.table(t) != nil else { throw MeasureError(message: L("%@ attend une table.", "ALL")) }
             case .call("VALUES", let a) where a.count == 1:
                 try columnArg(a[0], "VALUES")
+            case .call("KEEPFILTERS", let a) where a.count == 1:
+                try tableArg(a[0], f)
             case .call("TOPN", let a) where a.count >= 3:
                 try sub(a[0])
                 try tableArg(a[1], "TOPN")
@@ -484,6 +517,11 @@ enum MeasureCompiler {
                     case .call("USERELATIONSHIP", let k) where k.count == 2:
                         try columnArg(k[0], "USERELATIONSHIP")
                         try columnArg(k[1], "USERELATIONSHIP")
+                    case .call("__IN", let k) where k.count >= 1:
+                        guard case .ref(let t, let n) = k[0], case .column = resolve(table: t, name: n, home: home, m) else {
+                            throw MeasureError(message: L("Le filtre de CALCULATE doit porter sur une colonne."))
+                        }
+                        for x in k.dropFirst() { try sub(x) }
                     case .binary(let op, .ref(let t, let n), let v) where ["=", "<>", "<", "<=", ">", ">="].contains(op):
                         guard case .column = resolve(table: t, name: n, home: home, m) else {
                             throw MeasureError(message: L("Le filtre de CALCULATE doit porter sur une colonne."))
@@ -808,6 +846,8 @@ final class MeasureEvaluator {
             return TableRows(table: t, rows: Array(table.rows.indices), removesFilters: true, baseRows: self.rows(for: f2), filters: f2)
         case .call("VALUES", let a) where a.count == 1:
             return try distinctRows(try column(a[0], home: home), baseRows: rows, filters: filters, removes: false)
+        case .call("KEEPFILTERS", let a) where a.count == 1:
+            return try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
         case .call("FILTER", let a) where a.count == 2:
             var t = try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
             t.rows = try t.rows.filter { r in
@@ -913,12 +953,16 @@ final class MeasureEvaluator {
         case "COUNTROWS":
             let t = try tableRows(args[0], home: home, rows: rows, filters: filters, row: row, depth: depth)
             return t.rows.isEmpty ? .blank : .number(Double(t.rows.count))
-        case "SUMX", "AVERAGEX", "MINX", "MAXX", "COUNTX":
+        case "__IN":
+            let x = try sub(args[0])
+            for a in args.dropFirst() where compare(x, try sub(a), "=") { return .bool(true) }
+            return .bool(false)
+        case "SUMX", "AVERAGEX", "MINX", "MAXX", "COUNTX", "COUNTAX":
             let t = try tableRows(args[0], home: home, rows: rows, filters: filters, row: row, depth: depth)
             var acc = Acc(distinct: false)
             for r in t.rows {
                 let v = try eval(args[1], home: home, rows: rows, filters: filters, row: rowContext(t, r), depth: depth + 1)
-                if f == "COUNTX" { if !v.isBlank { acc.add(.number(1)) } } else if let d = v.number { acc.add(.number(d)) }
+                if f == "COUNTX" || f == "COUNTAX" { if !v.isBlank { acc.add(.number(1)) } } else if let d = v.number { acc.add(.number(d)) }
             }
             switch f {
             case "SUMX": return acc.result(.sum).map { .number($0) } ?? .blank
@@ -944,6 +988,14 @@ final class MeasureEvaluator {
             let digits = args.count > 1 ? Int(try sub(args[1]).number ?? 0) : 0
             let p = pow(10.0, Double(digits))
             return .number((d * p).rounded() / p)
+        case "MROUND":
+            guard let x = try sub(args[0]).number, let m = try sub(args[1]).number, m != 0 else { return .blank }
+            return .number((x / m).rounded() * m)
+        case "ROUNDUP", "ROUNDDOWN":
+            guard let x = try sub(args[0]).number else { return .blank }
+            let p = pow(10.0, Double(args.count > 1 ? Int(try sub(args[1]).number ?? 0) : 0))
+            let v = x * p
+            return .number((f == "ROUNDUP" ? (v < 0 ? v.rounded(.down) : v.rounded(.up)) : (v < 0 ? v.rounded(.up) : v.rounded(.down))) / p)
         case "ISBLANK": return .bool(try sub(args[0]).isBlank)
         case "AND": return .bool(try sub(args[0]).truthy && sub(args[1]).truthy)
         case "OR": return .bool(try sub(args[0]).truthy || sub(args[1]).truthy)
@@ -1075,21 +1127,29 @@ final class MeasureEvaluator {
 
     // MARK: CALCULATE filters
 
+    /// Group labels that match a value (booleans match the spellings importers produce).
+    static func labels(for v: MValue) -> Set<String> {
+        switch v {
+        case .number(let d): [GroupKey.of(.number(d), nil).label]
+        case .text(let s): [s]
+        case .bool(let b): b ? ["VRAI", "TRUE", "True", "true", "1"] : ["FAUX", "FALSE", "False", "false", "0"]
+        case .blank: [GroupKey.blankLabel]
+        case .date(let d): [GroupKey.of(.date(d), nil).label]
+        }
+    }
+
     private func applyFilter(_ a: Expr, to current: [FilterSpec], home: String, rows: [Int],
                              filters: [FilterSpec], row: RowContext?, depth: Int) throws -> [FilterSpec] {
         switch a {
         case .binary("=", let lhs, let rhs):
             let fr = try column(lhs, home: home)
             let v = try eval(rhs, home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
-            let label: String
-            switch v {
-            case .number(let d): label = GroupKey.of(.number(d), nil).label
-            case .text(let s): label = s
-            case .bool(let b): label = b ? "VRAI" : "FAUX"
-            case .blank: label = GroupKey.blankLabel
-            case .date(let d): label = GroupKey.of(.date(d), nil).label
-            }
-            return current.filter { $0.field.columnKey != fr.columnKey } + [FilterSpec(field: fr, allowed: [label])]
+            return current.filter { $0.field.columnKey != fr.columnKey } + [FilterSpec(field: fr, allowed: Self.labels(for: v))]
+        case .call("__IN", let k) where k.count >= 1:
+            let fr = try column(k[0], home: home)
+            var labels = Set<String>()
+            for x in k.dropFirst() { labels.formUnion(Self.labels(for: try eval(x, home: home, rows: rows, filters: filters, row: row, depth: depth + 1))) }
+            return current.filter { $0.field.columnKey != fr.columnKey } + [FilterSpec(field: fr, allowed: labels)]
         case .binary(let op, let lhs, let rhs) where ["<>", "<", "<=", ">", ">="].contains(op):
             // Comparison on a column: keep the rows of its table that satisfy it (replaces filters on that column).
             let fr = try column(lhs, home: home)

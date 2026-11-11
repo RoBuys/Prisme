@@ -69,8 +69,11 @@ import data, then build interactive reports with drag and drop. The interface is
   **.pbip** projects (TMSL `model.bim` or TMDL, PBIR or legacy `report.json`) bring tables, columns, calculated
   columns, measures, relationships, pages and visuals (scaled to the page). Data is reloaded from the sources found
   in the M queries (CSV / Excel / JSON files — Windows paths are looked up next to the report or asked for — web,
-  PostgreSQL, MySQL). **.pbix** files only expose their layout: tables are recreated empty from the visuals' fields
-  (use **Change Source…** on a table) and measures as placeholders. An import summary lists what couldn't be
+  PostgreSQL, MySQL; files hosted online; "Enter data" tables stored in the query). **.pbix** files: the data model
+  is decompressed (Microsoft's Xpress9 decoder) and its metadata read, so tables, columns, measures, relationships
+  and Power Query sources come through like a .pbit; the rows stored in the file aren't decoded yet, they are
+  reloaded from the sources (use **Change Source…** to point a table to a file). Simple calculated tables
+  (`GENERATESERIES`, `CALENDAR`, `CALENDARAUTO`) are computed. An import summary lists what couldn't be
   converted (unsupported visuals or DAX, calculated tables, bidirectional relationships).
 - **Page elements**: text boxes (with `{Measure}` placeholders showing live values), images, shapes and buttons
   (⌘-click to go to a page, apply a bookmark, go back after a drillthrough or open a link).
@@ -98,7 +101,7 @@ translations):
 ```
 
 The Power BI fixtures in `Tests/PrismeTests/Fixtures` are synthetic files written from Microsoft's format
-documentation.
+documentation, plus one of Microsoft's sample reports (MIT) — see the fixtures README.
 
 Development options:
 
@@ -138,7 +141,8 @@ renewed automatically.
 
 - No many-to-many relationships, no bidirectional filtering.
 - The measure language is a subset of DAX: no calculated tables, no table variables, no `SUMMARIZE` / `ADDCOLUMNS`.
-- Power BI import doesn't run M transformations (only the source is read), and .pbix data can't be read.
+- Power BI import doesn't run M transformations (only the source is read); the VertiPaq data stored in .pbix files
+  isn't decoded.
 - Transformations cover common steps only (no custom M code, no fuzzy merge).
 
 ## Structure
@@ -163,9 +167,12 @@ renewed automatically.
 | `PowerBIService.swift` | Power BI REST API client and state |
 | `PowerBIView.swift` | Power BI view, settings and embedded report |
 | `Localization.swift` | `L()` translation helper, language setting and English strings |
+| `PBIXModel.swift` | .pbix data model: Xpress9 decompression, metadata database |
+| `Sources/CXpress9` | Microsoft's Xpress9 decoder (C, MIT License) |
 | `PowerBIImport.swift` | .pbit / .pbip / .pbix import (TMSL, TMDL, Layout, PBIR, M sources) |
 | `SampleData.swift` | Sample dataset (Ventes, Produits, Régions) |
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The Xpress9 decoder in `Sources/CXpress9` is Copyright (c) Microsoft Corporation,
+MIT License (see `Sources/CXpress9/LICENSE`).

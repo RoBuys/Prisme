@@ -60,6 +60,20 @@ extension Importer {
         case .web:
             guard let s = source.url, let url = URL(string: s) else { throw ImportError(message: L("Adresse web invalide.")) }
             let data = try WebReader.fetch(url, header: source.header, value: Keychain.get(source.secretAccount))
+            let ext = url.pathExtension.lowercased()
+            if source.sheet != nil || ["xlsx", "xlsm", "csv", "tsv"].contains(ext) {
+                // A file hosted online: read it like a local file.
+                let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("prisme-web-\(UUID().uuidString).\(ext.isEmpty ? "xlsx" : ext)")
+                try data.write(to: tmp)
+                defer { try? FileManager.default.removeItem(at: tmp) }
+                let loaded = try load(tmp)
+                guard var t = loaded.first(where: { source.sheet == nil || $0.source?.sheet == source.sheet || $0.name == source.sheet }) ?? loaded.first else {
+                    throw ImportError(message: L("La requête n'a renvoyé aucune donnée."))
+                }
+                t.name = name
+                t.source = source
+                return [t]
+            }
             return [try table(name, try JSONReader.grid(data, path: source.jsonPath), source)]
         }
     }

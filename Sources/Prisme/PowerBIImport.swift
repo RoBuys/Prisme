@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Compression
 import UniformTypeIdentifiers
 
 // Imports Power BI files:
@@ -44,6 +45,8 @@ struct PBITableSpec {
     var measures: [(name: String, expression: String, format: String?)] = []
     var mExpression: String?
     var calculated = false
+    /// DAX expression of a calculated table.
+    var calcExpression: String?
 }
 
 struct PBIRelSpec {
@@ -57,6 +60,8 @@ struct PBIProject {
     var relationships: [PBIRelSpec] = []
     var pages: [PBIPageSpec] = []
     var hasModel = true
+    /// The model was read from a .pbix DataModel (its stored data isn't decoded).
+    var fromPBIXModel = false
     var folder: URL
 }
 
@@ -80,6 +85,10 @@ enum PowerBIImporter {
         if let schema = try? Data(contentsOf: dir.appendingPathComponent("DataModelSchema")),
            let json = jsonObject(schema) as? [String: Any] {
             (p.tables, p.relationships) = parseTMSL(json)
+        } else if let dm = try? Data(contentsOf: dir.appendingPathComponent("DataModel")),
+                  let model = try? PBIXDataModel.model(dm) {
+            (p.tables, p.relationships) = model
+            p.fromPBIXModel = true
         } else {
             p.hasModel = false
         }
@@ -191,7 +200,7 @@ enum PowerBIImporter {
                 }
             }
             if let part = (t["partitions"] as? [[String: Any]])?.first, let src = part["source"] as? [String: Any] {
-                if (src["type"] as? String) == "calculated" { spec.calculated = true }
+                if (src["type"] as? String) == "calculated" { spec.calculated = true; spec.calcExpression = text(src["expression"]) }
                 else { spec.mExpression = text(src["expression"]) }
             }
             tables.append(spec)
@@ -361,6 +370,7 @@ enum PowerBIImporter {
                         tables[t].measures.append((h.name, e, nil))
                     case "partition":
                         if h.value?.lowercased() == "calculated" { tables[t].calculated = true }
+                        objectLevel = 1
                     default:
                         break
                     }
@@ -383,7 +393,8 @@ enum PowerBIImporter {
                 case "partition":
                     if l.text.lowercased().hasPrefix("source") {
                         let h = tmdlHeader(String(l.text.dropFirst("source".count)))
-                        tables[t].mExpression = tmdlExpression(lines, &i, level: objectLevel + 1, inline: h.value ?? "")
+                        let e = tmdlExpression(lines, &i, level: objectLevel + 1, inline: h.value ?? "")
+                        if tables[t].calculated { tables[t].calcExpression = e } else { tables[t].mExpression = e }
                     }
                 default:
                     break
@@ -551,6 +562,43 @@ enum MSource {
         return String(m[r]).replacingOccurrences(of: "\"\"", with: "\"")
     }
 
+    /// "Enter data" tables: rows stored in the query as deflated, base64-encoded JSON.
+    static func embeddedTable(_ m: String) -> [[RawCell]]? {
+        guard m.contains("Binary.Decompress"), let b64 = argument(m, after: "Binary.FromText"),
+              let packed = Data(base64Encoded: b64), let json = inflate(packed),
+              let rows = (try? JSONSerialization.jsonObject(with: json)) as? [[Any]] else { return nil }
+        var names: [String] = []
+        if let r = m.range(of: "type table ["), let end = m[r.upperBound...].firstIndex(of: "]") {
+            for part in m[r.upperBound..<end].split(separator: ",") {
+                let lhs = part.split(separator: "=", maxSplits: 1).first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+                names.append(lhs.hasPrefix("#\"") ? String(lhs.dropFirst(2).dropLast()).replacingOccurrences(of: "\"\"", with: "\"") : lhs)
+            }
+        }
+        let width = max(names.count, rows.map(\.count).max() ?? 0)
+        while names.count < width { names.append(L("Colonne %@", names.count + 1)) }
+        return [names.map { .text($0) }] + rows.map { r in (0..<width).map { i in
+            guard i < r.count else { return RawCell.empty }
+            if let s = r[i] as? String { return s.isEmpty ? .empty : .text(s) }
+            if let n = r[i] as? NSNumber { return .number(n.doubleValue) }
+            return .empty
+        } }
+    }
+
+    /// Raw DEFLATE decompression (Power Query's Compression.Deflate).
+    static func inflate(_ data: Data) -> Data? {
+        var capacity = max(data.count * 8, 4096)
+        while capacity <= 256 << 20 {
+            var out = [UInt8](repeating: 0, count: capacity)
+            let n = data.withUnsafeBytes { src in
+                compression_decode_buffer(&out, capacity, src.bindMemory(to: UInt8.self).baseAddress!, data.count, nil, COMPRESSION_ZLIB)
+            }
+            if n == 0 { return nil }
+            if n < capacity { return Data(out.prefix(n)) }
+            capacity *= 4
+        }
+        return nil
+    }
+
     /// Recognizes common sources: CSV / Excel / JSON files, web JSON, PostgreSQL, MySQL.
     static func source(_ m: String) -> (DataSource, String?)? {
         if let path = argument(m, after: "File.Contents") {
@@ -559,8 +607,11 @@ enum MSource {
             }
             return (DataSource(path: path), path)
         }
-        if m.contains("Web.Contents"), let url = argument(m, after: "Web.Contents") {
-            return (DataSource(kind: .web, url: url), nil)
+        for fn in ["Web.Contents", "AzureStorage.BlobContents"] {
+            guard m.contains(fn), let url = argument(m, after: fn) else { continue }
+            // A workbook or CSV hosted online is downloaded; otherwise the response is read as JSON.
+            let sheet = m.contains("Excel.Workbook") ? navigation(m, "Item") : nil
+            return (DataSource(sheet: sheet, kind: .web, url: url), nil)
         }
         for (fn, kind, defaultPort) in [("PostgreSQL.Database", SourceKind.postgres, 5432), ("MySQL.Database", SourceKind.mysql, 3306)] {
             guard m.contains(fn), let server = argument(m, after: fn), let db = argument(m, after: fn, index: 1) else { continue }
@@ -628,6 +679,7 @@ extension AppState {
 
         var notes: [String] = []
         var loadedCount = 0
+        var calculatedTables: [(String, String)] = []
         var specs = project.tables
         if !project.hasModel {
             // .pbix: rebuild empty tables from the fields the visuals use.
@@ -648,8 +700,24 @@ extension AppState {
             notes.append(L("Fichier .pbix : le modèle et les données ne sont pas lisibles. Les tables ont été recréées vides à partir des champs des visuels ; utilisez « Changer la source… » sur chaque table, et recréez les mesures."))
         }
 
+        if project.fromPBIXModel {
+            notes.append(L("Fichier .pbix : le modèle (tables, mesures, relations) a été lu ; les données stockées dans le fichier ne le sont pas encore, elles sont rechargées depuis les sources d'origine quand Prisme les trouve."))
+        }
         for spec in specs {
-            if spec.calculated { notes.append(L("Table calculée ignorée : %@", spec.name)); continue }
+            if spec.calculated && spec.columns.isEmpty { notes.append(L("Table calculée ignorée : %@", spec.name)); continue }
+            if spec.calculated {
+                // Structure (and measures) kept; rows computed afterwards for simple expressions.
+                var table = DataTable(name: spec.name, columns: spec.columns.map {
+                    DataColumn(name: $0.name, type: Self.columnType($0.dataType), expression: $0.expression)
+                }, rows: [])
+                table.rows = []
+                tables.append(table)
+                calculatedTables.append((spec.name, spec.calcExpression ?? ""))
+                for m in spec.measures {
+                    measures.append(Measure(name: m.name, table: spec.name, expression: m.expression, format: Self.measureFormat(m.format)))
+                }
+                continue
+            }
             let dataCols = spec.columns.filter { $0.expression == nil }
             var table = DataTable(name: spec.name, columns: dataCols.map { DataColumn(name: $0.name, type: Self.columnType($0.dataType)) }, rows: [])
             if let m = spec.mExpression, var (source, path) = MSource.source(m) {
@@ -671,6 +739,10 @@ extension AppState {
                 } else {
                     notes.append(L("« %@ » : fichier source introuvable, table vide.", spec.name))
                 }
+            } else if let m = spec.mExpression, let grid = MSource.embeddedTable(m),
+                      let l = Importer.makeTable(name: spec.name, grid: grid, source: nil) {
+                table.rows = Self.align(l, to: dataCols, types: table.columns.map(\.type))
+                loadedCount += 1
             } else if project.hasModel {
                 notes.append(L("« %@ » : source non reconnue (seuls CSV, Excel, JSON, web, PostgreSQL et MySQL sont rechargés), table vide.", spec.name))
             }
@@ -699,6 +771,11 @@ extension AppState {
             relationships.append(Relationship(fromTable: r.fromTable, fromColumn: r.fromColumn, toTable: r.toTable,
                                               toColumn: r.toColumn, isActive: r.active))
             if r.bothDirections { notes.append(L("Relation %@ → %@ : le filtrage bidirectionnel n'est pas pris en charge (sens unique conservé).", r.fromTable, r.toTable)) }
+        }
+        for (name, expr) in calculatedTables {
+            if !fillCalculatedTable(name, expr) {
+                notes.append(L("Table calculée « %@ » : structure importée, données non calculées (seuls GENERATESERIES, CALENDAR et CALENDARAUTO sont pris en charge).", name))
+            }
         }
         recomputeCalculatedColumns()
         let invalid = measures.filter { MeasureCompiler.validate($0.expression, home: $0.table, name: $0.name, model) != nil }
@@ -737,6 +814,71 @@ extension AppState {
         }
         if !notes.isEmpty { summary += "\n\n" + notes.joined(separator: "\n") }
         alertMessage = summary
+    }
+
+    /// Computes simple calculated tables: GENERATESERIES(start, end, step), CALENDAR(start, end), CALENDARAUTO().
+    func fillCalculatedTable(_ name: String, _ expr: String) -> Bool {
+        guard let ti = tables.firstIndex(where: { $0.name == name }), !tables[ti].columns.isEmpty,
+              case .success(let e) = MeasureCompiler.parse(expr), case .call(let f, let args) = e else { return false }
+        func scalar(_ x: Expr) -> MValue? {
+            let me = Measure(name: "__calc", table: tables.first { $0.name != name }?.name ?? name, expression: "")
+            var m = model
+            m.measures.append(me)
+            let deps = MeasureCompiler.dependencies(Measure(name: "__calc", table: me.table, expression: Self.source(of: x, in: expr)), m)
+            guard let ctx = Engine.context(for: deps.isEmpty ? [FieldRef(table: me.table, column: "")] : deps, m) else { return nil }
+            let ev = MeasureEvaluator(ctx: ctx, model: m)
+            return try? ev.evaluateValue(Measure(name: "__calc", table: me.table, expression: Self.source(of: x, in: expr)),
+                                         rows: ctx.rowIndices([]), filters: [])
+        }
+        var values: [CellValue] = []
+        switch f {
+        case "GENERATESERIES":
+            guard args.count >= 2, let a = scalar(args[0])?.number, let b = scalar(args[1])?.number else { return false }
+            let step = args.count > 2 ? (scalar(args[2])?.number ?? 1) : 1
+            guard step != 0, abs((b - a) / step) < 1_000_000 else { return false }
+            var x = a
+            while step > 0 ? x <= b + 1e-9 : x >= b - 1e-9 { values.append(.number(x)); x += step }
+        case "CALENDAR", "CALENDARAUTO":
+            var lo: Date?, hi: Date?
+            if f == "CALENDAR", args.count == 2 {
+                lo = scalar(args[0]).flatMap { $0.number }.map { Date(timeIntervalSince1970: $0) }
+                hi = scalar(args[1]).flatMap { $0.number }.map { Date(timeIntervalSince1970: $0) }
+            } else {
+                let dates = tables.filter { $0.name != name }.flatMap { t in
+                    t.columns.indices.filter { t.columns[$0].type == .date }.flatMap { c in t.rows.compactMap { $0[c].date } }
+                }
+                let cal = Fmt.calendar
+                lo = dates.min().flatMap { cal.date(from: DateComponents(year: cal.component(.year, from: $0), month: 1, day: 1)) }
+                hi = dates.max().flatMap { cal.date(from: DateComponents(year: cal.component(.year, from: $0), month: 12, day: 31)) }
+            }
+            guard let start = lo, let end = hi, end >= start, end.timeIntervalSince(start) < 86_400 * 366 * 200 else { return false }
+            var d = Fmt.calendar.startOfDay(for: start)
+            while d <= end { values.append(.date(d)); d = Fmt.calendar.date(byAdding: .day, value: 1, to: d)! }
+        default:
+            return false
+        }
+        let dataCols = tables[ti].columns.indices.filter { tables[ti].columns[$0].expression == nil }
+        guard let first = dataCols.first else { return false }
+        if case .date = values.first { tables[ti].columns[first].type = .date } else { tables[ti].columns[first].type = .number }
+        tables[ti].rows = values.map { v in tables[ti].columns.indices.map { $0 == first ? v : .empty } }
+        return true
+    }
+
+    /// Re-serializes a sub-expression's source text (simple cases only: used for calculated-table arguments).
+    static func source(of e: Expr, in full: String) -> String {
+        switch e {
+        case .number(let d): return Fmt.plain(d)
+        case .string(let s): return "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        case .bool(let b): return b ? "TRUE()" : "FALSE()"
+        case .blank: return "BLANK()"
+        case .ref(let t, let n): return (t.map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" } ?? "") + "[\(n)]"
+        case .table(let t): return "'\(t.replacingOccurrences(of: "'", with: "''"))'"
+        case .unary(let o, let a): return o + source(of: a, in: full)
+        case .binary(let o, let a, let b): return "(" + source(of: a, in: full) + " " + o + " " + source(of: b, in: full) + ")"
+        case .call(let f, let args): return f + "(" + args.map { source(of: $0, in: full) }.joined(separator: ", ") + ")"
+        case .letIn(let defs, let body):
+            return defs.map { "VAR \($0.0) = " + source(of: $0.1, in: full) }.joined(separator: " ") + " RETURN " + source(of: body, in: full)
+        }
     }
 
     private func resetDocument() {

@@ -711,6 +711,18 @@ enum Strings {
         "Signet : %@": "Bookmark: %@",
         "Lien web": "Web link",
 
+        // .pbix data model
+        "Modèle de données au format inconnu.": "Unknown data model format.",
+        "Impossible d'initialiser le décodeur XPress9.": "Couldn't initialize the XPress9 decoder.",
+        "Échec de la décompression du modèle de données.": "Couldn't decompress the data model.",
+        "Métadonnées du modèle introuvables.": "Model metadata not found.",
+        "Fichier .pbix : le modèle (tables, mesures, relations) a été lu ; les données stockées dans le fichier ne le sont pas encore, elles sont rechargées depuis les sources d'origine quand Prisme les trouve.": ".pbix file: the model (tables, measures, relationships) was read; the data stored in the file isn't read yet, it is reloaded from the original sources when Prisme finds them.",
+
+        "« { » attendu après IN.": "“{” expected after IN.",
+        "« } » attendu.": "“}” expected.",
+
+        "Table calculée « %@ » : structure importée, données non calculées (seuls GENERATESERIES, CALENDAR et CALENDARAUTO sont pris en charge).": "Calculated table “%@”: structure imported, rows not computed (only GENERATESERIES, CALENDAR and CALENDARAUTO are supported).",
+
         // Export
         "Exporter": "Export",
         "PDF": "PDF",
