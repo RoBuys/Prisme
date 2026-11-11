@@ -41,7 +41,38 @@ struct VisualContentView: View {
             }
         case .slicer:
             SlicerView(visual: visual)
+        case .combo:
+            CartesianChartView(data: Engine.chartData(visual, state.model, filters), type: .combo,
+                               format: visual.fmt, selected: selected, onSelect: onSelect)
+        case .scatter:
+            ScatterVisualView(data: Engine.chartData(visual, state.model, filters), format: visual.fmt,
+                              selected: selected, onSelect: onSelect)
+        case .matrix:
+            TableVisualView(data: Engine.matrixData(visual, state.model, filters), selected: selected, onSelect: onSelect)
+        case .gauge:
+            GaugeVisualView(values: Engine.scalars(visual, state.model, filters), label: visual.values.first?.displayName ?? "",
+                            format: Engine.valueFormat(visual, state.model), color: Theme.colors(1, first: visual.fmt.color)[0])
+        case .kpi:
+            KPIVisualView(values: Engine.scalars(visual, state.model, filters), label: visual.values.first?.displayName ?? "",
+                          format: Engine.valueFormat(visual, state.model), trend: kpiTrend(filters),
+                          color: Theme.colors(1, first: visual.fmt.color)[0])
+        case .map:
+            MapVisualView(data: Engine.chartData(visual, state.model, filters), format: visual.fmt,
+                          selected: selected, onSelect: onSelect)
         }
+    }
+}
+
+extension VisualContentView {
+    /// KPI sparkline: the first value along the axis field, as a line chart.
+    func kpiTrend(_ filters: [FilterSpec]) -> ChartData? {
+        guard !visual.axis.isEmpty, let vf = visual.values.first else { return nil }
+        var line = visual
+        line.type = .line
+        line.values = [vf]
+        line.legend = nil
+        line.format = nil
+        return Engine.chartData(line, state.model, filters)
     }
 }
 
@@ -149,6 +180,16 @@ struct CartesianChartView: View {
                     .foregroundStyle(by: .value("s", p.series))
                     .interpolationMethod(.monotone)
                     .opacity(0.75)
+            } else if type == .combo && p.series != data.series.first {
+                LineMark(x: .value("c", p.category), y: .value("v", p.value))
+                    .foregroundStyle(by: .value("s", p.series))
+                    .interpolationMethod(.monotone)
+                PointMark(x: .value("c", p.category), y: .value("v", p.value))
+                    .foregroundStyle(by: .value("s", p.series))
+                    .symbolSize(22)
+                    .annotation(position: .top, spacing: 2) {
+                        if format.dataLabels { Text(label(p.value)).font(.system(size: 9)).foregroundStyle(.secondary) }
+                    }
             } else {
                 BarMark(x: .value("c", p.category), y: .value("v", p.value))
                     .foregroundStyle(by: .value("s", p.series))

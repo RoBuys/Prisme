@@ -127,8 +127,11 @@ extension AppState {
             guard let ctx = Engine.context(for: fields.isEmpty ? [vf.field] : fields, model),
                   let fn = Engine.valueFunction(vf, ctx, MeasureEvaluator(ctx: ctx, model: model)) else { return [] }
             return [[vf.displayName], [fn(ctx.rowIndices(filters), filters).map(plain) ?? ""]]
-        case .table:
-            let t = Engine.tableData(v, model, filters, limit: .max)
+        case .gauge, .kpi:
+            let vals = Engine.scalars(v, model, filters)
+            return [v.values.map(\.displayName), vals.map { $0.map(plain) ?? "" }]
+        case .table, .matrix:
+            let t = v.type == .matrix ? Engine.matrixData(v, model, filters, limit: .max) : Engine.tableData(v, model, filters, limit: .max)
             guard t.message == nil else { return [] }
             return [t.headers] + t.raw
         case .slicer:

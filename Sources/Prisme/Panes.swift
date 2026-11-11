@@ -101,6 +101,68 @@ struct VisualizationsPane: View {
             valuesWell(L("Valeurs"), v, multi: true)
         case .slicer:
             axisWell(L("Champ"), v, multi: false)
+        case .matrix:
+            axisWell(L("Lignes"), v, multi: true)
+            legendWell(v, title: L("Colonnes"))
+            valuesWell(L("Valeurs"), v, multi: false)
+        case .scatter:
+            axisWell(L("Détails"), v, multi: false)
+            slotWell(L("Axe X"), v, 0)
+            slotWell(L("Axe Y"), v, 1)
+            slotWell(L("Taille"), v, 2)
+        case .combo:
+            axisWell(L("Axe"), v, multi: false)
+            slotWell(L("Valeur (colonnes)"), v, 0)
+            slotWell(L("Valeur (courbe)"), v, 1)
+        case .gauge:
+            slotWell(L("Valeur"), v, 0)
+            slotWell(L("Cible"), v, 1)
+            slotWell(L("Maximum"), v, 2)
+        case .kpi:
+            slotWell(L("Valeur"), v, 0)
+            slotWell(L("Cible"), v, 1)
+            axisWell(L("Tendance"), v, multi: false)
+        case .map:
+            axisWell(L("Emplacement"), v, multi: false)
+            slotWell(L("Taille"), v, 0)
+            Text(L("Les noms de lieux sont localisés avec le service de géocodage d'Apple."))
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+        }
+    }
+
+    /// A single-value well bound to position `index` of the value list.
+    private func slotWell(_ title: String, _ v: Visual, _ index: Int) -> some View {
+        wellSection(title) {
+            if index < v.values.count {
+                let vf = v.values[index]
+                FieldChip(name: vf.displayName, warning: warning(vf.field, v), isMeasure: vf.measure) {
+                    aggregationMenu(vf, v)
+                } onRemove: {
+                    state.mutateVisual(v.id) { $0.values.remove(at: index) }
+                }
+            }
+            if index <= v.values.count {
+                FieldDropZone(placeholder: index < v.values.count ? L("Remplacer le champ") : L("Ajouter un champ ici")) {
+                    state.addField($0, to: .slot(index), visualID: v.id)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func aggregationMenu(_ vf: ValueField, _ v: Visual) -> some View {
+        let isNumber = state.column(for: vf.field)?.type == .number
+        if vf.measure, let m = state.measure(for: vf.field) {
+            Button(L("Modifier la mesure…")) { state.editMeasure(m) }
+        }
+        ForEach(vf.measure ? [] : Aggregation.allCases.filter { isNumber || !$0.isNumericOnly }, id: \.self) { a in
+            Button {
+                state.mutateVisual(v.id) { vis in
+                    if let i = vis.values.firstIndex(where: { $0.id == vf.id }) { vis.values[i].aggregation = a }
+                }
+            } label: {
+                if vf.aggregation == a { Label(a.label, systemImage: "checkmark") } else { Text(a.label) }
+            }
         }
     }
 
@@ -130,8 +192,8 @@ struct VisualizationsPane: View {
         }
     }
 
-    private func legendWell(_ v: Visual) -> some View {
-        wellSection(L("Légende")) {
+    private func legendWell(_ v: Visual, title: String? = nil) -> some View {
+        wellSection(title ?? L("Légende")) {
             if let l = v.legend {
                 FieldChip(name: l.displayName, warning: warning(l, v)) {
                     dateLevelMenu(l) { level in state.mutateVisual(v.id) { $0.legend?.dateLevel = level } }
@@ -230,15 +292,15 @@ struct VisualizationsPane: View {
     @ViewBuilder
     private func visualOptions(_ v: Visual) -> some View {
         let f = v.fmt
-        if v.type.isCartesian || v.type.isPie {
+        if v.type.isAxisChart || v.type.isPie || v.type == .map {
             toggle(L("Étiquettes de données"), v, \.dataLabels)
-            toggle(L("Légende"), v, \.showLegend)
+            if v.type != .scatter && v.type != .map { toggle(L("Légende"), v, \.showLegend) }
         }
-        if v.type.isCartesian {
+        if v.type.isAxisChart {
             toggle(L("Quadrillage"), v, \.gridlines)
-            toggle(L("Titres des axes"), v, \.axisTitles)
+            if v.type != .scatter { toggle(L("Titres des axes"), v, \.axisTitles) }
         }
-        if v.type.isCartesian || v.type.isPie {
+        if v.type.isAxisChart || v.type.isPie || [.gauge, .kpi, .map].contains(v.type) {
             HStack {
                 ColorPicker(L("Couleur principale"), selection: Binding(
                     get: { f.color.flatMap(Color.init(hexString:)) ?? Theme.palette[0] },
@@ -257,13 +319,13 @@ struct VisualizationsPane: View {
             }
             .font(.system(size: 11))
         }
-        if v.type.isCartesian || v.type.isPie {
+        if v.type.isCartesian || v.type.isPie || v.type == .combo {
             Picker(L("Tri"), selection: Binding(get: { f.sort }, set: { val in state.mutateFormat(v.id) { $0.sort = val } })) {
                 ForEach(SortMode.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             .font(.system(size: 11))
         }
-        if v.type.isCartesian || v.type.isPie || v.type == .table {
+        if v.type.isCartesian || v.type.isPie || v.type == .table || v.type == .combo {
             Stepper(value: Binding(get: { f.topN }, set: { val in state.mutateFormat(v.id) { $0.topN = max(0, val) } }),
                     in: 0...100) {
                 Text(f.topN == 0 ? L("Top N : tous") : L("Top N : %@", f.topN)).font(.system(size: 11))

@@ -192,7 +192,7 @@ struct ValueField: Hashable, Codable, Identifiable {
 // MARK: - Report
 
 enum VisualType: String, Codable, CaseIterable, Identifiable {
-    case column, bar, line, area, pie, donut, card, table, slicer
+    case column, bar, line, area, pie, donut, card, table, slicer, matrix, scatter, combo, gauge, kpi, map
     var id: String { rawValue }
 
     var label: String {
@@ -206,6 +206,12 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
         case .card: L("Carte")
         case .table: L("Tableau")
         case .slicer: L("Segment")
+        case .matrix: L("Matrice")
+        case .scatter: L("Nuage de points")
+        case .combo: L("Histogramme et courbe")
+        case .gauge: L("Jauge")
+        case .kpi: L("Indicateur clé (KPI)")
+        case .map: L("Carte géographique")
         }
     }
 
@@ -220,10 +226,22 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
         case .card: "123.rectangle"
         case .table: "tablecells"
         case .slicer: "line.3.horizontal.decrease.circle"
+        case .matrix: "square.grid.3x3"
+        case .scatter: "chart.dots.scatter"
+        case .combo: "chart.bar.xaxis"
+        case .gauge: "gauge.with.dots.needle.67percent"
+        case .kpi: "arrow.up.right.circle"
+        case .map: "map"
         }
     }
 
     var isCartesian: Bool { [.column, .bar, .line, .area].contains(self) }
+    /// Charts drawn on category / value axes (formatting options apply).
+    var isAxisChart: Bool { isCartesian || self == .combo || self == .scatter }
+    /// Value wells are fixed slots (X, Y, size…) rather than a list.
+    var usesValueSlots: Bool { [.scatter, .combo, .gauge, .kpi, .map].contains(self) }
+    /// The value list can hold several fields.
+    var allowsManyValues: Bool { [.table, .matrix].contains(self) || isCartesian }
     var isPie: Bool { self == .pie || self == .donut }
 
     var defaultSize: CGSize {
@@ -232,6 +250,10 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
         case .slicer: CGSize(width: 240, height: 260)
         case .table: CGSize(width: 480, height: 300)
         case .pie, .donut: CGSize(width: 380, height: 280)
+        case .matrix: CGSize(width: 520, height: 300)
+        case .gauge: CGSize(width: 300, height: 210)
+        case .kpi: CGSize(width: 300, height: 180)
+        case .map: CGSize(width: 480, height: 340)
         default: CGSize(width: 460, height: 290)
         }
     }
@@ -304,10 +326,10 @@ struct Visual: Identifiable, Hashable, Codable {
 
     var autoTitle: String {
         switch type {
-        case .card: return values.first?.displayName ?? type.label
+        case .card, .gauge, .kpi: return values.first?.displayName ?? type.label
         case .slicer: return axis.first?.displayName ?? type.label
-        case .table:
-            let names = axis.map(\.displayName) + values.map(\.displayName)
+        case .table, .matrix:
+            let names = axis.map(\.displayName) + [legend].compactMap { $0?.displayName } + values.map(\.displayName)
             return names.isEmpty ? type.label : names.joined(separator: ", ")
         default:
             let v = (type.isPie ? Array(values.prefix(1)) : values).map(\.displayName).joined(separator: ", ")

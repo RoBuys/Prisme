@@ -458,7 +458,7 @@ enum Engine {
         data.valueTitle = vals.map(\.0.displayName).joined(separator: ", ")
         data.categoryTitle = ax.displayName
         if v.fmt.topN > 0 && cats.count > v.fmt.topN { cats = Array(cats.prefix(v.fmt.topN)) }
-        let limit = v.type.isPie ? 30 : (isTrend ? 1000 : 100)
+        let limit = v.type.isPie ? 30 : (isTrend || v.type == .scatter || v.type == .map ? 2000 : 100)
         if cats.count > limit { cats = Array(cats.prefix(limit)); data.truncated = true }
 
         let seriesKeys: [GroupKey] = legendValue != nil
@@ -543,6 +543,77 @@ enum Engine {
                 + vals.map { format($0.1(all, filters), $0.0, m, override: override) }
         }
         if keys.isEmpty { data.message = L("Aucune donnée pour ces filtres") }
+        return data
+    }
+
+    // MARK: Scalars (gauge, KPI)
+
+    /// One value per value field, over all rows passing the filters.
+    static func scalars(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec]) -> [Double?] {
+        var fields: [FieldRef] = []
+        for vf in v.values {
+            fields += vf.measure ? (m.measure(for: vf.field).map { MeasureCompiler.dependencies($0, m) } ?? []) : [vf.field]
+        }
+        guard let ctx = context(for: fields.isEmpty ? v.values.map(\.field) : fields, m) else { return v.values.map { _ in nil } }
+        let ev = MeasureEvaluator(ctx: ctx, model: m)
+        let rows = ctx.rowIndices(filters)
+        return v.values.map { vf in valueFunction(vf, ctx, ev)?(rows, filters) }
+    }
+
+    // MARK: Matrix
+
+    /// Rows × columns (legend field) cross-tab of the first value, with row and column totals.
+    /// Without a column field, a matrix behaves like a table.
+    static func matrixData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec], limit: Int = 500) -> TableData {
+        guard let colField = v.legend else { return tableData(v, m, filters, limit: limit) }
+        guard let ctx = context(for: queryFields(v, m), m) else {
+            return TableData(message: L("Glissez des champs depuis le volet Données"))
+        }
+        let ev = MeasureEvaluator(ctx: ctx, model: m)
+        let axes = v.axis.compactMap { f in ctx.accessor(f).map { (f, $0) } }
+        guard let colValue = ctx.accessor(colField), let vf = v.values.first, let fn = valueFunction(vf, ctx, ev) else {
+            return TableData(message: L("Ajoutez des champs dans « Lignes », « Colonnes » et « Valeurs »"))
+        }
+        let all = ctx.rowIndices(filters)
+        var cells: [[GroupKey]: [GroupKey: [Int]]] = [:]
+        var rowGroups: [[GroupKey]: [Int]] = [:]
+        var colGroups: [GroupKey: [Int]] = [:]
+        for r in all {
+            let rk = axes.map { GroupKey.of($0.1(r), $0.0.dateLevel) }
+            let ck = GroupKey.of(colValue(r), colField.dateLevel)
+            cells[rk, default: [:]][ck, default: []].append(r)
+            rowGroups[rk, default: []].append(r)
+            colGroups[ck, default: []].append(r)
+        }
+        guard !all.isEmpty else { return TableData(message: L("Aucune donnée pour ces filtres")) }
+        let cols = Array(colGroups.keys.sorted().prefix(60))
+        let rowKeys = rowGroups.keys.sorted { a, b in
+            for (x, y) in zip(a, b) where x != y { return x < y }
+            return false
+        }
+        let override = v.fmt.valueFormat
+        func rowFilters(_ rk: [GroupKey]) -> [FilterSpec] {
+            zip(axes, rk).map { FilterSpec(field: $0.0.0, allowed: [$0.1.label], isGroup: true) }
+        }
+        func colFilter(_ ck: GroupKey) -> FilterSpec { FilterSpec(field: colField, allowed: [ck.label], isGroup: true) }
+        func value(_ rows: [Int], _ extra: [FilterSpec]) -> Double? { fn(rows, filters + extra) }
+
+        var data = TableData()
+        data.headers = axes.map { $0.0.displayName } + cols.map(\.label) + [L("Total")]
+        data.numeric = axes.map { _ in false } + cols.map { _ in true } + [true]
+        data.totalRowCount = rowKeys.count
+        for rk in rowKeys.prefix(limit) {
+            let rf = rowFilters(rk)
+            let vals = cols.map { ck in cells[rk]?[ck].flatMap { value($0, rf + [colFilter(ck)]) } } + [value(rowGroups[rk]!, rf)]
+            data.rows.append(rk.map(\.label) + vals.map { format($0, vf, m, override: override) })
+            data.raw.append(rk.map(\.label) + vals.map { $0.map(Fmt.plain) ?? "" })
+            data.rowKeys.append(rk.first?.label ?? "")
+        }
+        if !axes.isEmpty {
+            data.totals = [L("Total")] + Array(repeating: "", count: axes.count - 1)
+                + cols.map { format(value(colGroups[$0]!, [colFilter($0)]), vf, m, override: override) }
+                + [format(value(all, []), vf, m, override: override)]
+        }
         return data
     }
 

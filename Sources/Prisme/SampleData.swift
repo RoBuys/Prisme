@@ -20,7 +20,7 @@ enum SampleData {
         }
     }
 
-    static func make(names: (sales: String, products: String, regions: String)) -> (tables: [DataTable], measures: [Measure], page: ReportPage) {
+    static func make(names: (sales: String, products: String, regions: String)) -> (tables: [DataTable], measures: [Measure], pages: [ReportPage]) {
         let name = names.sales
         func w(_ fr: String, _ en: String) -> String { Loc.isEnglish ? en : fr }
         let online = w("En ligne", "Online")
@@ -30,6 +30,7 @@ enum SampleData {
         let mRevenue = w("Chiffre d'affaires", "Revenue"), mCount = w("Nombre de ventes", "Number of sales")
         let mBasket = w("Panier moyen", "Average basket"), mShare = w("Part du CA", "Revenue share")
         let mPerCapita = w("CA par habitant", "Revenue per capita")
+        let mTarget = w("Objectif annuel", "Annual target"), mRegionTarget = w("Objectif par région", "Regional target")
         var rng = RNG(state: 42)
         let products: [((String, String, Double), Double)] = [
             ((w("Ordinateur portable", "Laptop"), w("Informatique", "Computers"), 899), 1.2), ((w("Écran 27 pouces", "27-inch monitor"), w("Informatique", "Computers"), 249), 1.0),
@@ -104,6 +105,8 @@ enum SampleData {
             Measure(name: mPerCapita, table: name,
                     expression: "DIVIDE([\(mRevenue)], SUM(\(regionsRef)[Population (M)]) * 1000000)",
                     format: .decimal),
+            Measure(name: mTarget, table: name, expression: "1500000", format: .currency),
+            Measure(name: mRegionTarget, table: name, expression: "250000", format: .currency),
         ]
         func ms(_ n: String) -> ValueField { ValueField(field: FieldRef(table: name, column: n), aggregation: .sum, isMeasure: true) }
 
@@ -122,6 +125,18 @@ enum SampleData {
             Visual(type: .slicer, frame: r(996, 340, 264, 176), axis: [rf(cZone)]),
             Visual(type: .card, frame: r(996, 532, 264, 168), values: [ms(mPerCapita)]),
         ]
-        return ([table, productTable, regionTable], measures, ReportPage(name: w("Vue d'ensemble", "Overview"), visuals: visuals))
+        let analysis = [
+            Visual(type: .kpi, frame: r(20, 20, 300, 180), axis: [f("Date", .month)], values: [ms(mRevenue), ms(mTarget)]),
+            Visual(type: .gauge, frame: r(336, 20, 304, 180), values: [ms(mRevenue), ms(mTarget)]),
+            Visual(type: .map, frame: r(656, 20, 604, 330), axis: [f(cRegion)], values: [ms(mRevenue)]),
+            Visual(type: .matrix, frame: r(20, 216, 620, 234), axis: [pf(cCategory)], legend: f(cChannel), values: [ms(mRevenue)]),
+            Visual(type: .combo, frame: r(20, 466, 620, 234), axis: [f(cRegion)], values: [ms(mRevenue), ms(mRegionTarget)]),
+            Visual(type: .scatter, frame: r(656, 366, 604, 334), axis: [f(cProduct)],
+                   values: [sum(cQty), ms(mRevenue), ms(mCount)]),
+        ]
+        return ([table, productTable, regionTable], measures, [
+            ReportPage(name: w("Vue d'ensemble", "Overview"), visuals: visuals),
+            ReportPage(name: w("Analyse", "Analysis"), visuals: analysis),
+        ])
     }
 }

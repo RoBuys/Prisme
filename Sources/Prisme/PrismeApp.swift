@@ -35,6 +35,10 @@ struct PrismeApp: App {
             AppState.shared.editMeasure(m)
         }
         if args.contains("--model") { AppState.shared.mode = .model }
+        if let i = args.firstIndex(of: "--page"), i + 1 < args.count, let n = Int(args[i + 1]),
+           n >= 1, n <= AppState.shared.pages.count {
+            AppState.shared.selectPage(AppState.shared.pages[n - 1].id)
+        }
         if args.contains("--powerbi") { AppState.shared.mode = .powerbi }
     }
 

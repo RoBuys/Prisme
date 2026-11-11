@@ -3,7 +3,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 enum AppMode { case report, data, model, powerbi }
-enum Well { case axis, legend, values }
+enum Well: Equatable { case axis, legend, values, slot(Int) }
 
 struct MeasureDraft: Identifiable {
     var id: UUID?
@@ -296,34 +296,40 @@ final class AppState {
     }
 
     func addField(_ field: FieldRef, to well: Well, visualID: UUID) {
-        if measure(for: field) != nil {
-            guard well == .values, let v = visual(visualID) else { return }
-            let vf = ValueField(field: field, aggregation: .sum, isMeasure: true)
-            mutateVisual(visualID) { vis in
-                if v.type == .table || v.type.isCartesian { vis.values.append(vf) } else { vis.values = [vf] }
-            }
-            if crossFilter?.visualID == visualID { crossFilter = nil }
-            return
-        }
-        guard let col = column(for: field), let v = visual(visualID) else { return }
+        guard let v = visual(visualID) else { return }
+        let isMeasure = measure(for: field) != nil
+        let col = column(for: field)
+        guard isMeasure || col != nil else { return }
+        if isMeasure, well == .axis || well == .legend { return }
         var f = field
         f.dateLevel = nil
+        func valueField() -> ValueField {
+            isMeasure ? ValueField(field: field, aggregation: .sum, isMeasure: true)
+                      : ValueField(field: f, aggregation: defaultAggregation(for: f))
+        }
         mutateVisual(visualID) { vis in
             switch well {
             case .axis:
-                if col.type == .date { f.dateLevel = vis.type == .slicer ? .year : (vis.type == .table ? nil : .month) }
-                if vis.type == .table {
+                if col?.type == .date {
+                    switch vis.type {
+                    case .slicer, .matrix: f.dateLevel = .year
+                    case .table, .scatter, .map: f.dateLevel = nil
+                    default: f.dateLevel = .month
+                    }
+                }
+                if vis.type == .table || vis.type == .matrix {
                     if !vis.axis.contains(f) { vis.axis.append(f) }
                 } else {
                     vis.axis = [f]
                     if vis.type == .slicer { vis.slicerSelection = [] }
                 }
             case .legend:
-                if col.type == .date { f.dateLevel = .year }
+                if col?.type == .date { f.dateLevel = .year }
                 vis.legend = f
             case .values:
-                let vf = ValueField(field: f, aggregation: defaultAggregation(for: f))
-                if v.type == .table || v.type.isCartesian { vis.values.append(vf) } else { vis.values = [vf] }
+                if v.type.allowsManyValues { vis.values.append(valueField()) } else { vis.values = [valueField()] }
+            case .slot(let i):
+                if i < vis.values.count { vis.values[i] = valueField() } else { vis.values.append(valueField()) }
             }
         }
         if crossFilter?.visualID == visualID { crossFilter = nil }
@@ -335,6 +341,8 @@ final class AppState {
             if let v = selectedVisual {
                 if v.values.contains(where: { $0.measure && $0.field == field }) {
                     mutateVisual(v.id) { $0.values.removeAll { $0.measure && $0.field == field } }
+                } else if v.type.usesValueSlots {
+                    addField(field, to: .slot(v.values.count), visualID: v.id)
                 } else if v.type != .slicer {
                     addField(field, to: .values, visualID: v.id)
                 }
@@ -351,6 +359,9 @@ final class AppState {
             }
             if v.type == .slicer { addField(field, to: .axis, visualID: v.id); return }
             if v.type == .card { addField(field, to: .values, visualID: v.id); return }
+            if v.type.usesValueSlots && col.type == .number {
+                addField(field, to: .slot(v.values.count), visualID: v.id); return
+            }
             if col.type == .number { addField(field, to: .values, visualID: v.id); return }
             if v.type == .table || v.axis.isEmpty { addField(field, to: .axis, visualID: v.id); return }
             if v.type.isCartesian && v.legend == nil { addField(field, to: .legend, visualID: v.id); return }
@@ -601,14 +612,13 @@ final class AppState {
         dataTableName = sample.tables[0].name
         detectRelationships(for: sample.tables.map(\.name))
         measures += sample.measures
-        let page = sample.page
         if pages.count == 1 && pages[0].visuals.isEmpty && pages[0].filters.isEmpty {
-            pages = [page]
+            pages = sample.pages
         } else {
-            pages.append(page)
+            pages += sample.pages
         }
         didChange()
-        selectPage(page.id)
+        selectPage(sample.pages[0].id)
         mode = .report
     }
 
