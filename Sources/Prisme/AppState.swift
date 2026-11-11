@@ -216,12 +216,111 @@ final class AppState {
 
     func toggleCrossFilter(from v: Visual, label: String?) {
         selectedVisualID = v.id
-        guard let label, let f = v.axis.first else { crossFilter = nil; return }
+        guard let label, let f = v.axisField ?? v.axis.first else { crossFilter = nil; return }
         if crossFilter?.visualID == v.id && crossFilter?.label == label {
             crossFilter = nil
         } else {
             crossFilter = CrossFilter(pageID: currentPageID, visualID: v.id, field: f, label: label)
         }
+    }
+
+    // MARK: Drill (hierarchies)
+
+    func drillDown(_ v: Visual, into label: String) {
+        guard v.canDrillDown else { return }
+        mutateVisual(v.id) { vis in
+            var path = Array((vis.drillPath ?? []).prefix(vis.level))
+            path.append(label)
+            vis.drillPath = path
+            vis.drillLevel = vis.level + 1
+        }
+        if crossFilter?.visualID == v.id { crossFilter = nil }
+    }
+
+    func drillUp(_ v: Visual) {
+        guard v.level > 0 else { return }
+        mutateVisual(v.id) { vis in
+            vis.drillLevel = vis.level - 1
+            vis.drillPath = Array((vis.drillPath ?? []).prefix(vis.level))
+        }
+        if crossFilter?.visualID == v.id { crossFilter = nil }
+    }
+
+    /// "Go to the next level": all values of the next field, without filtering on a parent.
+    func nextLevel(_ v: Visual) {
+        guard v.canDrillDown else { return }
+        mutateVisual(v.id) { vis in
+            vis.drillPath = Array((vis.drillPath ?? []).prefix(vis.level))
+            vis.drillLevel = vis.level + 1
+        }
+        if crossFilter?.visualID == v.id { crossFilter = nil }
+    }
+
+    func toggleDrillMode(_ v: Visual) {
+        mutateVisual(v.id) { $0.drillMode = !($0.drillMode ?? false) }
+    }
+
+    /// Replaces a date axis field by the Year › Quarter › Month › Day hierarchy.
+    func expandDateHierarchy(_ v: Visual, at index: Int) {
+        mutateVisual(v.id) { vis in
+            guard index < vis.axis.count else { return }
+            var f = vis.axis[index]
+            let levels: [FieldRef] = DateLevel.allCases.map { f.dateLevel = $0; return f }
+            vis.axis.replaceSubrange(index...index, with: levels)
+            vis.drillLevel = 0
+            vis.drillPath = []
+        }
+    }
+
+    /// Clicks on a chart: drill down in drill mode, cross-filter otherwise.
+    func chartClicked(_ v: Visual, label: String?) {
+        if let label, v.drillMode == true, v.canDrillDown {
+            selectedVisualID = v.id
+            drillDown(v, into: label)
+        } else {
+            toggleCrossFilter(from: v, label: label)
+        }
+    }
+
+    // MARK: Drillthrough
+
+    /// Pages that accept a drillthrough on this field.
+    func drillthroughTargets(for field: FieldRef) -> [ReportPage] {
+        pages.filter { p in p.id != currentPageID && (p.drillthrough ?? []).contains { $0.columnKey == field.columnKey } }
+    }
+
+    var drillthroughOrigin: UUID?
+
+    func drillthrough(to pageID: UUID, field: FieldRef, label: String) {
+        guard let pi = pages.firstIndex(where: { $0.id == pageID }),
+              let target = (pages[pi].drillthrough ?? []).first(where: { $0.columnKey == field.columnKey }) else { return }
+        var f = target
+        f.dateLevel = field.dateLevel
+        pages[pi].filters.removeAll { $0.isDrillthrough == true }
+        pages[pi].filters.insert(PageFilter(field: f, selected: [label], isDrillthrough: true), at: 0)
+        let origin = currentPageID
+        selectPage(pageID)
+        drillthroughOrigin = origin
+        didChange()
+    }
+
+    func drillthroughBack() {
+        guard let o = drillthroughOrigin, pages.contains(where: { $0.id == o }) else { drillthroughOrigin = nil; return }
+        mutatePage { $0.filters.removeAll { $0.isDrillthrough == true } }
+        selectPage(o)
+    }
+
+    func addDrillthroughField(_ field: FieldRef) {
+        guard column(for: field) != nil else { return }
+        mutatePage { p in
+            var list = p.drillthrough ?? []
+            if !list.contains(where: { $0.columnKey == field.columnKey }) { list.append(field) }
+            p.drillthrough = list
+        }
+    }
+
+    func removeDrillthroughField(_ field: FieldRef) {
+        mutatePage { p in p.drillthrough?.removeAll { $0.columnKey == field.columnKey } }
     }
 
     func clearSelection() {
@@ -329,8 +428,10 @@ final class AppState {
                     default: f.dateLevel = .month
                     }
                 }
-                if vis.type == .table || vis.type == .matrix {
+                if vis.type == .table || vis.type == .matrix || (vis.supportsHierarchy && !vis.axis.isEmpty) {
                     if !vis.axis.contains(f) { vis.axis.append(f) }
+                    vis.drillLevel = 0
+                    vis.drillPath = []
                 } else {
                     vis.axis = [f]
                     if vis.type == .slicer { vis.slicerSelection = [] }
@@ -425,6 +526,7 @@ final class AppState {
     // MARK: Pages
 
     func selectPage(_ id: UUID) {
+        drillthroughOrigin = nil
         currentPageID = id
         selectedVisualID = nil
         crossFilter = nil

@@ -8,10 +8,18 @@ struct VisualContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if visual.showTitle && visual.type != .card {
-                Text(visual.displayTitle)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color(hex: 0x252A33))
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(visual.displayTitle)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(hex: 0x252A33))
+                        .lineLimit(1)
+                    if visual.level > 0 {
+                        let path = (visual.drillPath ?? []).prefix(visual.level)
+                        Text(path.isEmpty ? "›" : "› " + path.joined(separator: " › "))
+                            .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                .padding(.trailing, visual.axis.count > 1 && visual.supportsHierarchy ? 96 : 24)
             }
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -21,7 +29,7 @@ struct VisualContentView: View {
     private var content: some View {
         let filters = state.filters(for: visual)
         let selected = state.highlighted(in: visual)
-        let onSelect: (String?) -> Void = { label in state.toggleCrossFilter(from: visual, label: label) }
+        let onSelect: (String?) -> Void = { label in state.chartClicked(visual, label: label) }
         switch visual.type {
         case .column, .bar, .line, .area:
             CartesianChartView(data: Engine.chartData(visual, state.model, filters), type: visual.type,

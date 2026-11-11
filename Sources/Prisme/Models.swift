@@ -343,8 +343,24 @@ struct Visual: Identifiable, Hashable, Codable {
     var values: [ValueField] = []
     var slicerSelection: Set<String> = []
     var format: VisualFormat?
+    /// Hierarchy drill state: current axis level, labels chosen at the upper levels, and whether clicks drill down.
+    var drillLevel: Int?
+    var drillPath: [String]?
+    var drillMode: Bool?
 
     var fmt: VisualFormat { format ?? VisualFormat() }
+
+    /// Charts whose axis can hold a hierarchy of fields.
+    var supportsHierarchy: Bool { type.isCartesian || type.isPie || type == .combo }
+    var level: Int { supportsHierarchy ? min(drillLevel ?? 0, max(axis.count - 1, 0)) : 0 }
+    var axisField: FieldRef? { axis.isEmpty ? nil : axis[level] }
+    var canDrillDown: Bool { supportsHierarchy && level < axis.count - 1 }
+
+    /// Filters implied by the drill path (labels chosen at the upper levels).
+    var drillFilters: [FilterSpec] {
+        let path = drillPath ?? []
+        return (0..<min(level, path.count)).map { FilterSpec(field: axis[$0], allowed: [path[$0]], isGroup: true) }
+    }
 
     var autoTitle: String {
         switch type {
@@ -357,7 +373,7 @@ struct Visual: Identifiable, Hashable, Codable {
             let v = (type.isPie ? Array(values.prefix(1)) : values).map(\.displayName).joined(separator: ", ")
             guard !v.isEmpty else { return type.label }
             var t = v
-            if let a = axis.first { t += L(" par %@", a.displayName) }
+            if let a = axisField { t += L(" par %@", a.displayName) }
             if type.isCartesian, let l = legend { t += L(" et %@", l.displayName) }
             return t
         }
@@ -372,6 +388,8 @@ struct PageFilter: Identifiable, Hashable, Codable {
     var id = UUID()
     var field: FieldRef
     var selected: Set<String> = []
+    /// Set by a drillthrough from another page.
+    var isDrillthrough: Bool?
 }
 
 struct ReportPage: Identifiable, Hashable, Codable {
@@ -379,6 +397,8 @@ struct ReportPage: Identifiable, Hashable, Codable {
     var name: String
     var visuals: [Visual] = []
     var filters: [PageFilter] = []
+    /// Drillthrough fields: other pages can open this page filtered on one of them.
+    var drillthrough: [FieldRef]?
 }
 
 enum PageSize {

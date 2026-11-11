@@ -88,11 +88,11 @@ struct VisualizationsPane: View {
     private func wells(_ v: Visual) -> some View {
         switch v.type {
         case .column, .bar, .line, .area:
-            axisWell(L("Axe"), v, multi: false)
+            axisWell(L("Axe"), v, multi: true)
             legendWell(v)
             valuesWell(L("Valeurs"), v, multi: true)
         case .pie, .donut:
-            axisWell(L("Légende"), v, multi: false)
+            axisWell(L("Légende"), v, multi: true)
             valuesWell(L("Valeurs"), v, multi: false)
         case .card:
             valuesWell(L("Champs"), v, multi: false)
@@ -111,7 +111,7 @@ struct VisualizationsPane: View {
             slotWell(L("Axe Y"), v, 1)
             slotWell(L("Taille"), v, 2)
         case .combo:
-            axisWell(L("Axe"), v, multi: false)
+            axisWell(L("Axe"), v, multi: true)
             slotWell(L("Valeur (colonnes)"), v, 0)
             slotWell(L("Valeur (courbe)"), v, 1)
         case .gauge:
@@ -177,10 +177,15 @@ struct VisualizationsPane: View {
         let items = multi ? v.axis : Array(v.axis.prefix(1))
         return wellSection(title) {
             ForEach(Array(items.enumerated()), id: \.offset) { i, f in
-                FieldChip(name: f.displayName, warning: warning(f, v)) {
+                FieldChip(name: (multi && v.supportsHierarchy && items.count > 1 && i == v.level ? "▸ " : "") + f.displayName,
+                          warning: warning(f, v)) {
                     dateLevelMenu(f) { level in state.mutateVisual(v.id) { $0.axis[i].dateLevel = level } }
+                    if v.supportsHierarchy && state.column(for: f)?.type == .date {
+                        Divider()
+                        Button(L("Hiérarchie de dates (Année › Trimestre › Mois › Jour)")) { state.expandDateHierarchy(v, at: i) }
+                    }
                 } onRemove: {
-                    state.mutateVisual(v.id) { $0.axis.remove(at: i) }
+                    state.mutateVisual(v.id) { $0.axis.remove(at: i); $0.drillLevel = 0; $0.drillPath = [] }
                     if state.crossFilter?.visualID == v.id { state.crossFilter = nil }
                 }
             }
@@ -570,6 +575,19 @@ struct FiltersPane: View {
                             Divider()
                         }
                     }
+                    Text(L("Extraction")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    ForEach(state.currentPage.drillthrough ?? [], id: \.self) { f in
+                        HStack {
+                            Image(systemName: "arrow.down.right.and.arrow.up.left").font(.system(size: 10)).foregroundStyle(Theme.accent)
+                            Text(f.displayName).font(.system(size: 11)).lineLimit(1)
+                            Spacer()
+                            Button { state.removeDrillthroughField(f) } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                        }
+                    }
+                    FieldDropZone(placeholder: L("Ajouter des champs d'extraction ici")) { state.addDrillthroughField($0) }
+                    Text(L("Sélectionnez une catégorie dans un visuel d'une autre page, puis menu « … » › Extraire."))
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    Divider()
                     Text(L("Filtres sur cette page")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                     ForEach(state.currentPage.filters) { f in FilterCard(filter: f) }
                     FieldDropZone(placeholder: L("Ajouter des champs de données ici")) { state.addPageFilter($0) }

@@ -28,6 +28,16 @@ struct ReportCanvas: View {
                 .clipped()
                 .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
                 .environment(\.colorScheme, .light)
+                .overlay(alignment: .topLeading) {
+                    if state.drillthroughOrigin != nil {
+                        Button { state.drillthroughBack() } label: {
+                            Label(L("Retour"), systemImage: "chevron.backward.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .padding(8)
+                    }
+                }
             }
             .dropDestination(for: URL.self) { urls, _ in
                 let files = urls.filter(\.isFileURL)
@@ -120,16 +130,57 @@ struct VisualContainer: View {
                 Button(L("Dupliquer")) { state.duplicateVisual(visual.id) }
                 Button(L("Mettre au premier plan")) { state.bringToFront(visual.id) }
                 Button(L("Exporter les données (CSV)…")) { state.exportCSV(visual.id) }
+                drillthroughItems
                 Divider()
                 Button(L("Supprimer"), role: .destructive) { state.deleteVisual(visual.id) }
             }
     }
 
     private var headerMenu: some View {
+        HStack(spacing: 2) {
+            if visual.supportsHierarchy && visual.axis.count > 1 {
+                drillButton("arrow.up", L("Remonter"), enabled: visual.level > 0) { state.drillUp(visual) }
+                drillButton("arrow.down", visual.drillMode == true ? L("Désactiver l'exploration au clic") : L("Explorer au clic"),
+                            enabled: true, active: visual.drillMode == true) { state.toggleDrillMode(visual) }
+                drillButton("arrow.down.to.line", L("Niveau suivant"), enabled: visual.canDrillDown) { state.nextLevel(visual) }
+            }
+            menu
+        }
+    }
+
+    private func drillButton(_ symbol: String, _ help: String, enabled: Bool, active: Bool = false,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .bold))
+                .frame(width: 20, height: 16)
+                .background(RoundedRectangle(cornerRadius: 3).fill(active ? Theme.accent.opacity(0.25) : Color.white.opacity(0.9)))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(enabled ? (active ? Theme.accent : Color.secondary) : Color.secondary.opacity(0.35))
+        .disabled(!enabled)
+        .help(help)
+    }
+
+    @ViewBuilder
+    private var drillthroughItems: some View {
+        if let cf = state.crossFilter, cf.visualID == visual.id {
+            let targets = state.drillthroughTargets(for: cf.field)
+            if !targets.isEmpty {
+                Divider()
+                ForEach(targets) { p in
+                    Button(L("Extraire « %@ » vers %@", cf.label, p.name)) { state.drillthrough(to: p.id, field: cf.field, label: cf.label) }
+                }
+            }
+        }
+    }
+
+    private var menu: some View {
         Menu {
             Button(L("Dupliquer")) { state.duplicateVisual(visual.id) }
             Button(L("Mettre au premier plan")) { state.bringToFront(visual.id) }
             Button(L("Exporter les données (CSV)…")) { state.exportCSV(visual.id) }
+            drillthroughItems
             Divider()
             Button(L("Supprimer"), role: .destructive) { state.deleteVisual(visual.id) }
         } label: {

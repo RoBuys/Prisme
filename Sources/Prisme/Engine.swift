@@ -445,7 +445,8 @@ enum Engine {
         }
         let evaluator = MeasureEvaluator(ctx: ctx, model: m)
         let axisLabel = v.type.isPie ? L("Légende") : L("Axe")
-        guard let ax = v.axis.first, let axisValue = ctx.accessor(ax) else {
+        let filters = filters + v.drillFilters
+        guard let ax = v.axisField, let axisValue = ctx.accessor(ax) else {
             return ChartData(message: L("Ajoutez un champ dans « %@ »", axisLabel))
         }
         var vals = v.values.compactMap { vf in valueFunction(vf, ctx, evaluator).map { (vf, $0) } }

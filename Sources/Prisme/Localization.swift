@@ -561,6 +561,18 @@ enum Strings {
         "Dépivoter des colonnes…": "Unpivot Columns…",
         "Colonne conditionnelle…": "Conditional Column…",
 
+        // Drill & drillthrough
+        "Remonter": "Drill up",
+        "Explorer au clic": "Drill down on click",
+        "Désactiver l'exploration au clic": "Turn off drill down on click",
+        "Niveau suivant": "Go to next level",
+        "Extraire « %@ » vers %@": "Drill through “%@” to %@",
+        "Retour": "Back",
+        "Hiérarchie de dates (Année › Trimestre › Mois › Jour)": "Date hierarchy (Year › Quarter › Month › Day)",
+        "Extraction": "Drillthrough",
+        "Ajouter des champs d'extraction ici": "Add drillthrough fields here",
+        "Sélectionnez une catégorie dans un visuel d'une autre page, puis menu « … » › Extraire.": "Select a category in a visual on another page, then “…” menu › Drill through.",
+
         // Export
         "Exporter": "Export",
         "PDF": "PDF",
