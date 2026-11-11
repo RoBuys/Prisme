@@ -77,6 +77,19 @@ struct GroupKey: Hashable, Comparable {
 
     static var blankLabel: String { L("(Vide)") }
 
+    /// Group keys of the values met in a loop (formatting each row's value is slow on large tables).
+    final class Memo {
+        let level: DateLevel?
+        private var cache: [CellValue: GroupKey] = [:]
+        init(_ level: DateLevel?) { self.level = level }
+        func key(_ v: CellValue) -> GroupKey {
+            if let k = cache[v] { return k }
+            let k = GroupKey.of(v, level)
+            cache[v] = k
+            return k
+        }
+    }
+
     static func of(_ v: CellValue, _ level: DateLevel?) -> GroupKey {
         switch v {
         case .empty: return GroupKey(label: blankLabel, sort: nil)
@@ -155,7 +168,7 @@ struct TableData {
 struct Acc {
     var sum = 0.0, count = 0, numCount = 0
     var min = Double.infinity, max = -Double.infinity
-    var distinct: Set<String>?
+    var distinct: Set<CellValue>?
 
     init(distinct: Bool) { self.distinct = distinct ? [] : nil }
 
@@ -167,7 +180,7 @@ struct Acc {
             if d < min { min = d }
             if d > max { max = d }
         }
-        if distinct != nil { distinct!.insert(GroupKey.of(v, nil).label) }
+        if distinct != nil { distinct!.insert(v) }
     }
 
     func result(_ a: Aggregation) -> Double? {
@@ -197,9 +210,11 @@ extension CellValue {
 }
 
 struct DataModel {
-    var tables: [DataTable]
-    var relationships: [Relationship]
-    var measures: [Measure] = []
+    var tables: [DataTable] { didSet { version = nil } }
+    var relationships: [Relationship] { didSet { version = nil } }
+    var measures: [Measure] = [] { didSet { version = nil } }
+    /// Identifies the app's current model, for caches; any change to a copy clears it.
+    var version: Int?
 
     func measure(for f: FieldRef) -> Measure? {
         measures.first { $0.table == f.table && $0.name == f.column }
@@ -365,7 +380,10 @@ struct QueryContext {
     }
 
     /// Indices of base rows that pass every applicable filter. Filters on unreachable tables are ignored.
-    func rowIndices(_ filters: [FilterSpec]) -> [Int] {
+    func rowIndices(_ filters: [FilterSpec]) -> [Int] { rowIndices(filters, within: nil) }
+
+    /// Base rows passing the filters, among `within` (all base rows when nil).
+    func rowIndices(_ filters: [FilterSpec], within: [Int]?) -> [Int] {
         var tests: [(Int) -> Bool] = []
         for f in filters where f.isActive && reaches(f.field.table) {
             if let set = f.rowSet {
@@ -380,17 +398,99 @@ struct QueryContext {
                 }
             } else {
                 guard let get = accessor(f.field) else { continue }
-                let level = f.field.dateLevel, allowed = f.allowed
-                tests.append { b in allowed.contains(GroupKey.of(get(b), level).label) }
+                let memo = GroupKey.Memo(f.field.dateLevel), allowed = f.allowed
+                tests.append { b in allowed.contains(memo.key(get(b)).label) }
             }
         }
+        if let within { return tests.isEmpty ? within : within.filter { b in tests.allSatisfy { $0(b) } } }
         let all = Array(base.rows.indices)
         if tests.isEmpty { return all }
         return all.filter { b in tests.allSatisfy { $0(b) } }
     }
 }
 
+/// Query contexts and visual results for the current model version (cleared when the model changes).
+final class EngineCache: @unchecked Sendable {
+    static let shared = EngineCache()
+    private let lock = NSLock()
+    private var version: Int?
+    private var contexts: [String: QueryContext] = [:]
+    private var results: [ResultKey: AnyObject] = [:]
+    /// Typed box: casting an optional stored as Any back to its type is unreliable.
+    private final class Box<T> { let value: T; init(_ v: T) { value = v } }
+
+    struct ResultKey: Hashable {
+        let kind: String
+        let visual: Visual
+        let filters: String
+        let extra: Int
+    }
+
+    private func sync(_ v: Int) {
+        if version != v { version = v; contexts.removeAll(); results.removeAll() }
+    }
+
+    func context(_ base: DataTable, _ m: DataModel) -> QueryContext {
+        guard let v = m.version else { return QueryContext(base: base, model: m) }
+        lock.lock()
+        sync(v)
+        if let c = contexts[base.name] { lock.unlock(); return c }
+        lock.unlock()
+        let c = QueryContext(base: base, model: m)
+        lock.lock()
+        if version == v { contexts[base.name] = c }
+        lock.unlock()
+        return c
+    }
+
+    func result<T>(_ kind: String, _ visual: Visual, _ filters: [FilterSpec], _ m: DataModel, extra: Int = 0, _ make: () -> T) -> T {
+        guard let v = m.version else { return make() }
+        let key = ResultKey(kind: kind, visual: visual, filters: FilterSpec.cacheKey(filters), extra: extra)
+        lock.lock()
+        sync(v)
+        if let r = results[key] as? Box<T> { lock.unlock(); return r.value }
+        lock.unlock()
+        let r = make()
+        lock.lock()
+        if version == v {
+            if results.count > 400 { results.removeAll() }
+            results[key] = Box(r)
+        }
+        lock.unlock()
+        return r
+    }
+}
+
+extension FilterSpec {
+    /// Identifies a filter context (used by caches).
+    static func cacheKey(_ filters: [FilterSpec]) -> String {
+        filters.map { f -> String in
+            var k = "\(f.field.columnKey)|\(f.field.dateLevel?.rawValue ?? "")|\(f.isGroup)|\(f.allowed.sorted().joined(separator: "\u{1E}"))"
+            if let r = f.range { k += "|r\(r.lowerBound)-\(r.upperBound)" }
+            if let s = f.rowSet { k += "|s\(s.count)-\(s.hashValue)" }
+            return k
+        }.sorted().joined(separator: "\u{1D}")
+    }
+}
+
 enum Engine {
+    // Visual queries, cached per model version, visual and filter context (views are redrawn often).
+    static func chartData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec]) -> ChartData {
+        EngineCache.shared.result("chart", v, filters, m) { computeChartData(v, m, filters) }
+    }
+
+    static func cardValue(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec]) -> (value: String, label: String)? {
+        EngineCache.shared.result("card", v, filters, m) { computeCardValue(v, m, filters) }
+    }
+
+    static func tableData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec], limit: Int = 1000) -> TableData {
+        EngineCache.shared.result("table", v, filters, m, extra: limit) { computeTableData(v, m, filters, limit: limit) }
+    }
+
+    static func matrixData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec], limit: Int = 500) -> TableData {
+        EngineCache.shared.result("matrix", v, filters, m, extra: limit) { computeMatrixData(v, m, filters, limit: limit) }
+    }
+
     static func table(named name: String?, in tables: [DataTable]) -> DataTable? {
         guard let name else { return nil }
         return tables.first { $0.name == name }
@@ -405,14 +505,14 @@ enum Engine {
         let need = Set(used)
         func reach(_ t: String) -> Set<String> { Set(m.reachable(from: t).map(\.table)) }
         if let b = used.first(where: { reach($0).isSuperset(of: need) }) {
-            return QueryContext(base: m.table(b)!, model: m)
+            return EngineCache.shared.context(m.table(b)!, m)
         }
         let outside = m.tables.map(\.name).filter { !need.contains($0) && reach($0).isSuperset(of: need) }
         if let b = outside.min(by: { reach($0).count < reach($1).count }) {
-            return QueryContext(base: m.table(b)!, model: m)
+            return EngineCache.shared.context(m.table(b)!, m)
         }
         // No table reaches all fields: use the first table; unreachable fields are ignored.
-        return QueryContext(base: m.table(first)!, model: m)
+        return EngineCache.shared.context(m.table(first)!, m)
     }
 
     /// Fields that drive the query: measures are replaced by the columns and tables they use.
@@ -474,7 +574,7 @@ enum Engine {
 
     // MARK: Charts
 
-    static func chartData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec]) -> ChartData {
+    private static func computeChartData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec]) -> ChartData {
         guard let ctx = context(for: queryFields(v, m), m) else {
             return ChartData(message: L("Glissez des champs depuis le volet Données"))
         }
@@ -498,8 +598,9 @@ enum Engine {
 
         struct Key: Hashable { let cat: GroupKey; let ser: GroupKey? }
         var groups: [Key: [Int]] = [:]
+        let axisMemo = GroupKey.Memo(ax.dateLevel), legendMemo = GroupKey.Memo(legendField?.dateLevel)
         for r in ctx.rowIndices(filters) {
-            let k = Key(cat: GroupKey.of(axisValue(r), ax.dateLevel), ser: legendValue.map { GroupKey.of($0(r), legendField?.dateLevel) })
+            let k = Key(cat: axisMemo.key(axisValue(r)), ser: legendValue.map { legendMemo.key($0(r)) })
             groups[k, default: []].append(r)
         }
         guard !groups.isEmpty else { return ChartData(message: L("Aucune donnée pour ces filtres")) }
@@ -557,7 +658,7 @@ enum Engine {
 
     // MARK: Card
 
-    static func cardValue(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec]) -> (value: String, label: String)? {
+    private static func computeCardValue(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec]) -> (value: String, label: String)? {
         guard let vf = v.values.first else { return nil }
         let fields = vf.measure ? (m.measure(for: vf.field).map { MeasureCompiler.dependencies($0, m) } ?? []) : [vf.field]
         guard let ctx = context(for: fields.isEmpty ? [vf.field] : fields, m) else { return nil }
@@ -568,7 +669,7 @@ enum Engine {
 
     // MARK: Table
 
-    static func tableData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec], limit: Int = 1000) -> TableData {
+    private static func computeTableData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec], limit: Int = 1000) -> TableData {
         guard let ctx = context(for: queryFields(v, m), m) else {
             return TableData(message: L("Glissez des champs depuis le volet Données"))
         }
@@ -579,7 +680,8 @@ enum Engine {
 
         let all = ctx.rowIndices(filters)
         var groups: [[GroupKey]: [Int]] = [:]
-        for r in all { groups[axes.map { GroupKey.of($0.1(r), $0.0.dateLevel) }, default: []].append(r) }
+        let memos = axes.map { GroupKey.Memo($0.0.dateLevel) }
+        for r in all { groups[axes.indices.map { memos[$0].key(axes[$0].1(r)) }, default: []].append(r) }
 
         var data = TableData()
         data.headers = axes.map { $0.0.displayName } + vals.map { $0.0.displayName }
@@ -635,7 +737,7 @@ enum Engine {
 
     /// Rows × columns (legend field) cross-tab of the first value, with row and column totals.
     /// Without a column field, a matrix behaves like a table.
-    static func matrixData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec], limit: Int = 500) -> TableData {
+    private static func computeMatrixData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec], limit: Int = 500) -> TableData {
         guard let colField = v.legend else { return tableData(v, m, filters, limit: limit) }
         guard let ctx = context(for: queryFields(v, m), m) else {
             return TableData(message: L("Glissez des champs depuis le volet Données"))
@@ -649,9 +751,10 @@ enum Engine {
         var cells: [[GroupKey]: [GroupKey: [Int]]] = [:]
         var rowGroups: [[GroupKey]: [Int]] = [:]
         var colGroups: [GroupKey: [Int]] = [:]
+        let memos = axes.map { GroupKey.Memo($0.0.dateLevel) }, colMemo = GroupKey.Memo(colField.dateLevel)
         for r in all {
-            let rk = axes.map { GroupKey.of($0.1(r), $0.0.dateLevel) }
-            let ck = GroupKey.of(colValue(r), colField.dateLevel)
+            let rk = axes.indices.map { memos[$0].key(axes[$0].1(r)) }
+            let ck = colMemo.key(colValue(r))
             cells[rk, default: [:]][ck, default: []].append(r)
             rowGroups[rk, default: []].append(r)
             colGroups[ck, default: []].append(r)

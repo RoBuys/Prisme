@@ -351,6 +351,11 @@ enum MeasureCompiler {
         case .call, .unary, .binary: break
         default: return nil
         }
+        return singleColumnCondition(a, home: home, m)
+    }
+
+    /// The only column an expression reads (no measures, aggregations or tables), if there is exactly one.
+    static func singleColumnCondition(_ a: Expr, home: String, _ m: DataModel) -> FieldRef? {
         var cols = Set<String>(), first: FieldRef?, ok = true
         func walk(_ e: Expr) {
             switch e {
@@ -890,7 +895,7 @@ final class MeasureEvaluator {
         if t == ctx.base.name { return ctx }
         if let c = tableContexts[t] { return c }
         guard let table = model.table(t) else { return nil }
-        let c = QueryContext(base: table, model: model)
+        let c = EngineCache.shared.context(table, model)
         tableContexts[t] = c
         return c
     }
@@ -1158,6 +1163,11 @@ final class MeasureEvaluator {
                          transitions: transitions, sources: sources, extras: extras, extraNames: pairs.map(\.0), groupBy: cols)
     }
 
+    private func isModifierArg(_ a: Expr) -> Bool {
+        if case .call(let g, _) = a { return MeasureCompiler.filterModifiers.contains(g) || g == "USERELATIONSHIP" }
+        return false
+    }
+
     /// Filter context after CALCULATE-style filter arguments (filter removers apply first, as in DAX).
     private func contextFilters(_ filterArgs: [Expr], home: String, rows: [Int], filters: [FilterSpec], row: RowContext?,
                                 depth: Int) throws -> [FilterSpec] {
@@ -1283,6 +1293,19 @@ final class MeasureEvaluator {
             return try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
         case .call("FILTER", let a) where a.count == 2:
             var t = try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+            if t.extras == nil, !t.table.isEmpty, let fr = MeasureCompiler.singleColumnCondition(a[1], home: home, model),
+               let qc = tableContext(t.table), let get = qc.accessor(fr) {
+                // The condition only reads one column: evaluated once per distinct value.
+                var memo: [CellValue: Bool] = [:]
+                t.rows = try t.rows.filter { r in
+                    let v = get(r)
+                    if let k = memo[v] { return k }
+                    let k = try eval(a[1], home: home, rows: rows, filters: filters, row: rowContext(t, r), depth: depth + 1).truthy
+                    memo[v] = k
+                    return k
+                }
+                return t
+            }
             t.rows = try t.rows.filter { r in
                 try eval(a[1], home: home, rows: rows, filters: filters, row: rowContext(t, r), depth: depth + 1).truthy
             }
@@ -1310,8 +1333,9 @@ final class MeasureEvaluator {
         var order: [Int] = []
         var groups: [Int: [Int]] = [:]
         var transitions: [Int: [FilterSpec]] = [:]
+        let memo = GroupKey.Memo(nil)
         for b in baseRows {
-            let label = GroupKey.of(get(b), nil).label
+            let label = memo.key(get(b)).label
             if let r = reps[label] { groups[r]!.append(b); continue }
             guard let r = ctx.relatedRow(fr.table, b) else { continue }
             reps[label] = r
@@ -1365,7 +1389,10 @@ final class MeasureEvaluator {
                                       row: nil, depth: depth + 1)
             }
             let newFilters = try contextFilters(filterArgs, home: home, rows: rows, filters: filters, row: row, depth: depth)
-            return try eval(expr, home: home, rows: self.rows(for: newFilters), filters: newFilters, row: nil, depth: depth + 1)
+            // Filters only added (none removed or replaced): narrow the current rows instead of scanning the table.
+            let onlyAdded = !filterArgs.contains(where: isModifierArg) && newFilters.count == filters.count + filterArgs.count
+            let newRows = onlyAdded ? ctx.rowIndices(Array(newFilters.suffix(filterArgs.count)), within: rows) : self.rows(for: newFilters)
+            return try eval(expr, home: home, rows: newRows, filters: newFilters, row: nil, depth: depth + 1)
         }
 
         switch f {

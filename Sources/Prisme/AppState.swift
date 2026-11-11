@@ -35,9 +35,19 @@ struct CrossFilter: Equatable {
 final class AppState {
     static let shared = AppState()
 
-    var tables: [DataTable] = []
-    var relationships: [Relationship] = []
-    var measures: [Measure] = []
+    var tables: [DataTable] = [] { didSet { modelVersion = Self.nextVersion() } }
+    var relationships: [Relationship] = [] { didSet { modelVersion = Self.nextVersion() } }
+    var measures: [Measure] = [] { didSet { modelVersion = Self.nextVersion() } }
+    /// Changes with the data model; query caches are keyed by it (unique across documents).
+    @ObservationIgnored private var modelVersion = AppState.nextVersion()
+    nonisolated(unsafe) private static var versionCounter = 0
+    private static let versionLock = NSLock()
+    private static func nextVersion() -> Int {
+        versionLock.lock()
+        defer { versionLock.unlock() }
+        versionCounter &+= 1
+        return versionCounter
+    }
     /// The measure being created or edited (drives the editor sheet).
     var measureDraft: MeasureDraft?
     /// The transformation step being set up (drives the step sheet), and errors of applied steps per table.
@@ -167,7 +177,11 @@ final class AppState {
         return t.columns[i]
     }
 
-    var model: DataModel { DataModel(tables: tables, relationships: relationships, measures: measures) }
+    var model: DataModel {
+        var m = DataModel(tables: tables, relationships: relationships, measures: measures)
+        m.version = modelVersion
+        return m
+    }
 
     func measure(for f: FieldRef) -> Measure? { measures.first { $0.table == f.table && $0.name == f.column } }
 
