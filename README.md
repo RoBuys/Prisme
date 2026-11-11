@@ -71,3 +71,7 @@ Options utiles au développement :
 | `DataGridView.swift` | Vue Données |
 | `ModelView.swift` | Vue Modèle et volet Relations |
 | `SampleData.swift` | Jeu de données d'exemple (Ventes, Produits, Régions) |
+
+## Licence
+
+MIT — voir [LICENSE](LICENSE).
