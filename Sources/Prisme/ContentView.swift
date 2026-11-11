@@ -49,6 +49,8 @@ struct ContentView: View {
                     DataGridView()
                     Divider()
                     FieldsPane().frame(width: 220)
+                } else if state.mode == .powerbi {
+                    PowerBIView()
                 } else {
                     ModelView()
                     Divider()
@@ -208,6 +210,8 @@ struct ModeRail: View {
             item(.report, "chart.bar.doc.horizontal", "Rapport")
             item(.data, "tablecells", "Données")
             item(.model, "point.3.connected.trianglepath.dotted", "Modèle")
+            Divider().frame(width: 30).padding(.vertical, 2)
+            item(.powerbi, "cloud", "Power BI")
             Spacer()
         }
         .padding(.vertical, 10)

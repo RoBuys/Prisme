@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-enum AppMode { case report, data, model }
+enum AppMode { case report, data, model, powerbi }
 enum Well { case axis, legend, values }
 
 struct MeasureDraft: Identifiable {

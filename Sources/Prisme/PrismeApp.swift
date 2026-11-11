@@ -34,6 +34,7 @@ struct PrismeApp: App {
             AppState.shared.editMeasure(m)
         }
         if args.contains("--model") { AppState.shared.mode = .model }
+        if args.contains("--powerbi") { AppState.shared.mode = .powerbi }
     }
 
     var body: some Scene {

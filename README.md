@@ -28,6 +28,10 @@ import data, then build interactive reports with drag and drop. The user interfa
   validates the expression as you type and previews its value; formats: integer, decimal, percentage, currency.
   Example: `Part du CA = DIVIDE([Chiffre d'affaires], CALCULATE([Chiffre d'affaires], ALLSELECTED(Ventes)))`.
 - **Saving** reports (data included) as `.prisme` files.
+- **Power BI reports shared with you** (**Power BI** view, cloud icon): sign in with your Microsoft work account,
+  browse My workspace and shared reports, workspaces and apps, and display reports interactively (embedded with the
+  official Power BI JavaScript client). You can also paste a link copied from app.powerbi.com; "Publish to web"
+  links open without signing in. See [Connecting to Power BI](#connecting-to-power-bi).
 
 ## Building
 
@@ -42,9 +46,35 @@ without a full Xcode, the SwiftUI macros of the macOS 27 SDK are not available.
 Development options:
 
 - `Prisme --inspect file.csv`: prints how a file is imported, then quits.
-- `Prisme --sample`: starts with the sample dataset (`--model` opens the Model view,
+- `Prisme --sample`: starts with the sample dataset (`--model` opens the Model view, `--powerbi` the Power BI view,
   `--edit-measure "Name"` opens a measure's editor).
 - `Prisme --snapshot capture.png`: saves an image of the window 3 s after launch.
+
+## Connecting to Power BI
+
+Prisme signs in as you (delegated permissions, OAuth 2.0 authorization code flow with PKCE; no client secret). The
+refresh token is stored in the macOS Keychain. Requirements:
+
+- A Microsoft work or school account with a **Power BI Pro** or **Premium Per User** license (or content hosted on a
+  Premium / Fabric capacity).
+- An **app registration** in Microsoft Entra ID, created once (you may need your administrator for consent):
+
+1. Open the [Microsoft Entra admin center](https://entra.microsoft.com) → **Applications** → **App registrations** →
+   **New registration**.
+2. Name: `Prisme`. Supported account types: *Accounts in this organizational directory only* (or multitenant if you
+   need several organizations).
+3. Redirect URI: platform **Public client/native (mobile & desktop)**, value `prisme://auth`. Register.
+4. **API permissions** → **Add a permission** → **Power BI Service** → **Delegated permissions**: `Report.Read.All`,
+   `Workspace.Read.All`, `App.Read.All`, `Dataset.Read.All`. If your organization requires it, click
+   **Grant admin consent** (or ask an administrator).
+5. Copy the **Application (client) ID** (and optionally the **Directory (tenant) ID**) from the app's Overview page.
+6. In Prisme: **Power BI** view → gear icon → paste the client ID (tenant: keep `organizations`, or paste your tenant
+   ID / domain) → **Se connecter avec Microsoft**.
+
+The report list uses the Power BI REST API (`GET /reports`, which includes reports shared with you, `GET /groups`,
+`GET /groups/{id}/reports`, `GET /apps`, `GET /apps/{id}/reports`). Reports are displayed in a web view with
+`powerbi-client` (loaded from jsDelivr with Subresource Integrity), using your Entra token (`TokenType.Aad`), which is
+renewed automatically.
 
 ## Known limitations
 
@@ -69,6 +99,9 @@ Development options:
 | `Panes.swift` | Visualizations, Data and Filters panes |
 | `DataGridView.swift` | Data view |
 | `ModelView.swift` | Model view and Relationships pane |
+| `PowerBIAuth.swift` | Microsoft Entra sign-in (PKCE) and Keychain storage |
+| `PowerBIService.swift` | Power BI REST API client and state |
+| `PowerBIView.swift` | Power BI view, settings and embedded report |
 | `SampleData.swift` | Sample dataset (Ventes, Produits, Régions) |
 
 ## License
