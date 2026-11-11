@@ -29,6 +29,27 @@ extension PrismeTests {
             #expect(st.pages.map(\.name) == ["Key Influencers", "Decomposition Tree", "Anomaly Detection"])
             // What-if parameter table: GENERATESERIES(-80, 20, 10).
             #expect(st.table("Opportunity Forecast Adjustment").rows.count == 11)
+            // Rows come from the VertiPaq storage of the file.
+            #expect(st.table("Opportunities").rows.count == 20_000)
+            #expect(st.table("Accounts").rows.count == 300)
+            #expect(try st.number("COUNTROWS(Opportunities)", table: "Opportunities") == 20_000)
+        }
+
+        @Test func decodesVertiPaqColumns() throws {
+            let dir = try PowerBIImporter.unzip(Fixture.url("AISample.pbix"))
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let tables = try PBIXDataModel.storedTables(Data(contentsOf: dir.appendingPathComponent("DataModel")))
+            let accounts = try #require(tables["Accounts"])
+            #expect(accounts["Account Number"]?.prefix(2) == [.text("AN-100003"), .text("AN-100005")])
+            #expect(accounts.values.allSatisfy { $0.count == 300 })
+            let opps = try #require(tables["Opportunities"])
+            #expect(opps["AccountSeq"]?.count == 20_000)
+            #expect(opps["Budget"]?.first == .number(3875))
+            #expect(tables["Campaigns"]?["CampaignSeq"]?.first == .number(7001))
+            let calendar = try #require(tables["Case Calendar"]?["Date"])
+            #expect(calendar.count == 731)
+            #expect(calendar.first == .date(Date(timeIntervalSince1970: 1_577_836_800)))   // 2020-01-01
+            #expect(!(tables["Accounts"] ?? [:]).isEmpty)
         }
 
         @Test func daxCommentsInAndCountax() throws {

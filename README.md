@@ -71,8 +71,9 @@ import data, then build interactive reports with drag and drop. The interface is
   in the M queries (CSV / Excel / JSON files — Windows paths are looked up next to the report or asked for — web,
   PostgreSQL, MySQL; files hosted online; "Enter data" tables stored in the query). **.pbix** files: the data model
   is decompressed (Microsoft's Xpress9 decoder) and its metadata read, so tables, columns, measures, relationships
-  and Power Query sources come through like a .pbit; the rows stored in the file aren't decoded yet, they are
-  reloaded from the sources (use **Change Source…** to point a table to a file). Simple calculated tables
+  and Power Query sources come through like a .pbit, and the rows stored in the file (VertiPaq column storage:
+  dictionaries, Huffman-compressed strings, RLE and bit-packed segments, value-encoded columns) are decoded, so the
+  report works without access to the original sources (snapshot of the last refresh). Simple calculated tables
   (`GENERATESERIES`, `CALENDAR`, `CALENDARAUTO`) are computed. An import summary lists what couldn't be
   converted (unsupported visuals or DAX, calculated tables, bidirectional relationships).
 - **Page elements**: text boxes (with `{Measure}` placeholders showing live values), images, shapes and buttons
@@ -141,8 +142,8 @@ renewed automatically.
 
 - No many-to-many relationships, no bidirectional filtering.
 - The measure language is a subset of DAX: no calculated tables, no table variables, no `SUMMARIZE` / `ADDCOLUMNS`.
-- Power BI import doesn't run M transformations (only the source is read); the VertiPaq data stored in .pbix files
-  isn't decoded.
+- Power BI import doesn't run M transformations (only the source is read); .pbix files saved with the multithreaded
+  XPress9 variant (very large models) aren't supported yet.
 - Transformations cover common steps only (no custom M code, no fuzzy merge).
 
 ## Structure
@@ -168,6 +169,7 @@ renewed automatically.
 | `PowerBIView.swift` | Power BI view, settings and embedded report |
 | `Localization.swift` | `L()` translation helper, language setting and English strings |
 | `PBIXModel.swift` | .pbix data model: Xpress9 decompression, metadata database |
+| `VertiPaq.swift` | .pbix stored data: ABF archive, dictionaries, Huffman strings, RLE / bit-packed segments |
 | `Sources/CXpress9` | Microsoft's Xpress9 decoder (C, MIT License) |
 | `PowerBIImport.swift` | .pbit / .pbip / .pbix import (TMSL, TMDL, Layout, PBIR, M sources) |
 | `SampleData.swift` | Sample dataset (Ventes, Produits, Régions) |
@@ -175,4 +177,6 @@ renewed automatically.
 ## License
 
 MIT — see [LICENSE](LICENSE). The Xpress9 decoder in `Sources/CXpress9` is Copyright (c) Microsoft Corporation,
-MIT License (see `Sources/CXpress9/LICENSE`).
+MIT License (see `Sources/CXpress9/LICENSE`). The VertiPaq decoding follows the format described by
+[pbixray](https://github.com/Hugoberry/pbixray) and [xmhuffman](https://github.com/Hugoberry/xmhuffman-cython)
+(both MIT License, by Igor Cotruta).

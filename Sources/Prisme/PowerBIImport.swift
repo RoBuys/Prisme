@@ -60,8 +60,10 @@ struct PBIProject {
     var relationships: [PBIRelSpec] = []
     var pages: [PBIPageSpec] = []
     var hasModel = true
-    /// The model was read from a .pbix DataModel (its stored data isn't decoded).
+    /// The model was read from a .pbix DataModel.
     var fromPBIXModel = false
+    /// Column values decoded from the .pbix VertiPaq storage, keyed by table then column.
+    var storedData: [String: [String: [CellValue]]] = [:]
     var folder: URL
 }
 
@@ -89,6 +91,7 @@ enum PowerBIImporter {
                   let model = try? PBIXDataModel.model(dm) {
             (p.tables, p.relationships) = model
             p.fromPBIXModel = true
+            p.storedData = (try? PBIXDataModel.storedTables(dm)) ?? [:]
         } else {
             p.hasModel = false
         }
@@ -701,10 +704,23 @@ extension AppState {
         }
 
         if project.fromPBIXModel {
-            notes.append(L("Fichier .pbix : le modèle (tables, mesures, relations) a été lu ; les données stockées dans le fichier ne le sont pas encore, elles sont rechargées depuis les sources d'origine quand Prisme les trouve."))
+            notes.append(project.storedData.isEmpty
+                ? L("Fichier .pbix : le modèle (tables, mesures, relations) a été lu, mais pas les données stockées ; elles sont rechargées depuis les sources d'origine quand Prisme les trouve.")
+                : L("Fichier .pbix : modèle et données lus depuis le fichier (instantané de la dernière actualisation)."))
         }
         for spec in specs {
             if spec.calculated && spec.columns.isEmpty { notes.append(L("Table calculée ignorée : %@", spec.name)); continue }
+            if spec.calculated, let stored = project.storedData[spec.name],
+               let rows = Self.storedRows(stored, spec.columns, spec.columns.map { Self.columnType($0.dataType) }) {
+                tables.append(DataTable(name: spec.name, columns: spec.columns.map {
+                    DataColumn(name: $0.name, type: Self.columnType($0.dataType), expression: $0.expression)
+                }, rows: rows))
+                loadedCount += 1
+                for m in spec.measures {
+                    measures.append(Measure(name: m.name, table: spec.name, expression: m.expression, format: Self.measureFormat(m.format)))
+                }
+                continue
+            }
             if spec.calculated {
                 // Structure (and measures) kept; rows computed afterwards for simple expressions.
                 var table = DataTable(name: spec.name, columns: spec.columns.map {
@@ -720,7 +736,16 @@ extension AppState {
             }
             let dataCols = spec.columns.filter { $0.expression == nil }
             var table = DataTable(name: spec.name, columns: dataCols.map { DataColumn(name: $0.name, type: Self.columnType($0.dataType)) }, rows: [])
-            if let m = spec.mExpression, var (source, path) = MSource.source(m) {
+            if let stored = project.storedData[spec.name],
+               let rows = Self.storedRows(stored, dataCols, table.columns.map(\.type)) {
+                // Data snapshot stored in the .pbix; the source is kept for a later refresh when it is reachable.
+                table.rows = rows
+                if let m = spec.mExpression, let (source, _) = MSource.source(m),
+                   source.sourceKind != .file || FileManager.default.fileExists(atPath: source.path) {
+                    table.source = source
+                }
+                loadedCount += 1
+            } else if let m = spec.mExpression, var (source, path) = MSource.source(m) {
                 if let p = path {
                     if let found = locate(p, near: project.folder, ask: askForFiles) { source.path = found } else { path = nil; source.path = "" }
                 }
@@ -892,6 +917,18 @@ extension AppState {
         selectedVisualID = nil
         crossFilter = nil
         fileURL = nil
+    }
+
+    /// Rows built from decoded VertiPaq columns (nil when none of the columns were stored).
+    static func storedRows(_ stored: [String: [CellValue]], _ cols: [PBIColumnSpec], _ types: [ColumnType]) -> [[CellValue]]? {
+        guard cols.contains(where: { stored[$0.name] != nil }) else { return nil }
+        let count = cols.compactMap { stored[$0.name]?.count }.max() ?? 0
+        let columnValues: [[CellValue]] = zip(cols, types).map { c, type in
+            guard let v = stored[c.name] else { return Array(repeating: .empty, count: count) }
+            let padded = v.count < count ? v + Array(repeating: .empty, count: count - v.count) : v
+            return Importer.coerce(Importer.cellsToRaw(padded), to: type)
+        }
+        return (0..<count).map { r in columnValues.map { $0[r] } }
     }
 
     /// Reorders and converts loaded columns to the model's columns (matched by source column, then by name).
