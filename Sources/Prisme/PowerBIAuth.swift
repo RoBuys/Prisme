@@ -49,12 +49,12 @@ final class PowerBIAuth: NSObject, ASWebAuthenticationPresentationContextProvidi
         let callback: URL = try await withCheckedThrowingContinuation { cont in
             let s = ASWebAuthenticationSession(url: comps.url!, callbackURLScheme: Self.callbackScheme) { url, error in
                 if let url { cont.resume(returning: url) }
-                else { cont.resume(throwing: error ?? PowerBIError.message("Connexion annulée.")) }
+                else { cont.resume(throwing: error ?? PowerBIError.message(L("Connexion annulée."))) }
             }
             s.presentationContextProvider = self
             s.prefersEphemeralWebBrowserSession = false
             session = s
-            if !s.start() { cont.resume(throwing: PowerBIError.message("Impossible d'ouvrir la fenêtre de connexion.")) }
+            if !s.start() { cont.resume(throwing: PowerBIError.message(L("Impossible d'ouvrir la fenêtre de connexion."))) }
         }
         session = nil
 
@@ -64,7 +64,7 @@ final class PowerBIAuth: NSObject, ASWebAuthenticationPresentationContextProvidi
             throw PowerBIError.message(item("error_description")?.replacingOccurrences(of: "+", with: " ") ?? err)
         }
         guard item("state") == state, let code = item("code") else {
-            throw PowerBIError.message("Réponse de connexion invalide.")
+            throw PowerBIError.message(L("Réponse de connexion invalide."))
         }
         return try await requestToken(tenant: tenant, form: [
             "client_id": clientID, "grant_type": "authorization_code", "code": code,
@@ -90,7 +90,7 @@ final class PowerBIAuth: NSObject, ASWebAuthenticationPresentationContextProvidi
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         guard (response as? HTTPURLResponse)?.statusCode == 200, let access = json["access_token"] as? String else {
             let desc = (json["error_description"] as? String)?.components(separatedBy: "\r\n").first
-            throw PowerBIError.message(desc ?? "Échec de l'obtention du jeton Microsoft.")
+            throw PowerBIError.message(desc ?? L("Échec de l'obtention du jeton Microsoft."))
         }
         let expires = (json["expires_in"] as? Double) ?? Double(json["expires_in"] as? String ?? "") ?? 3600
         return Tokens(accessToken: access, expiresAt: Date().addingTimeInterval(expires - 120),

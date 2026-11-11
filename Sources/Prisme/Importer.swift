@@ -24,7 +24,7 @@ enum Importer {
         case "csv", "tsv", "txt":
             let grid = try readCSV(url)
             guard let t = makeTable(name: base, grid: grid, source: DataSource(path: url.path)) else {
-                throw ImportError(message: "Le fichier « \(url.lastPathComponent) » ne contient aucune donnée.")
+                throw ImportError(message: L("Le fichier « %@ » ne contient aucune donnée.", url.lastPathComponent))
             }
             return [t]
         case "xlsx", "xlsm":
@@ -34,13 +34,13 @@ enum Importer {
                           source: DataSource(path: url.path, sheet: sheet.name))
             }
             guard !tables.isEmpty else {
-                throw ImportError(message: "Le classeur « \(url.lastPathComponent) » ne contient aucune feuille avec des données.")
+                throw ImportError(message: L("Le classeur « %@ » ne contient aucune feuille avec des données.", url.lastPathComponent))
             }
             return tables
         case "xls":
-            throw ImportError(message: "Le format .xls (Excel 97-2003) n'est pas pris en charge. Enregistrez le fichier au format .xlsx.")
+            throw ImportError(message: L("Le format .xls (Excel 97-2003) n'est pas pris en charge. Enregistrez le fichier au format .xlsx."))
         default:
-            throw ImportError(message: "Format de fichier non pris en charge : .\(ext)")
+            throw ImportError(message: L("Format de fichier non pris en charge : .%@", ext))
         }
     }
 
@@ -69,7 +69,7 @@ enum Importer {
         var names: [String] = []
         for i in 0..<width {
             var n = i < header.count ? rawText(header[i]) : ""
-            if n.isEmpty { n = "Colonne \(i + 1)" }
+            if n.isEmpty { n = L("Colonne %@", i + 1) }
             var candidate = n, k = 2
             while names.contains(candidate) { candidate = "\(n) (\(k))"; k += 1 }
             names.append(candidate)
@@ -232,7 +232,7 @@ enum Importer {
     static func readCSV(_ url: URL) throws -> [[RawCell]] {
         let data = try Data(contentsOf: url)
         guard var s = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1252) else {
-            throw ImportError(message: "Impossible de lire l'encodage du fichier « \(url.lastPathComponent) ».")
+            throw ImportError(message: L("Impossible de lire l'encodage du fichier « %@ ».", url.lastPathComponent))
         }
         if s.hasPrefix("\u{FEFF}") { s.removeFirst() }
         let delimiter: Unicode.Scalar = url.pathExtension.lowercased() == "tsv" ? "\t" : detectDelimiter(s)
@@ -316,13 +316,13 @@ enum XLSXReader {
         try p.run()
         p.waitUntilExit()
         guard p.terminationStatus == 0 else {
-            throw ImportError(message: "Le fichier « \(url.lastPathComponent) » n'est pas un classeur Excel valide.")
+            throw ImportError(message: L("Le fichier « %@ » n'est pas un classeur Excel valide.", url.lastPathComponent))
         }
 
         func file(_ path: String) -> Data? { try? Data(contentsOf: tmp.appendingPathComponent(path)) }
 
         guard let wbData = file("xl/workbook.xml"), let wb = DOMBuilder.parse(wbData) else {
-            throw ImportError(message: "Classeur Excel illisible (workbook.xml manquant).")
+            throw ImportError(message: L("Classeur Excel illisible (workbook.xml manquant)."))
         }
         var targets: [String: String] = [:]
         if let relsData = file("xl/_rels/workbook.xml.rels"), let rels = DOMBuilder.parse(relsData) {
@@ -335,7 +335,7 @@ enum XLSXReader {
 
         var sheets: [Sheet] = []
         for (i, s) in wb.descendants("sheet").enumerated() {
-            let name = s.attrs["name"] ?? "Feuille \(i + 1)"
+            let name = s.attrs["name"] ?? L("Feuille %@", i + 1)
             var path = "xl/worksheets/sheet\(i + 1).xml"
             if let rid = s.attrs["r:id"], let t = targets[rid] {
                 path = t.hasPrefix("/") ? String(t.dropFirst()) : "xl/" + t

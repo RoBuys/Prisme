@@ -92,14 +92,14 @@ final class PowerBIStore {
     /// A valid access token, refreshed when needed.
     func token() async throws -> String {
         if let a = accessToken, Date() < expiresAt { return a }
-        guard let r = refreshToken else { throw PowerBIError.message("Connectez-vous à Power BI.") }
+        guard let r = refreshToken else { throw PowerBIError.message(L("Connectez-vous à Power BI.")) }
         do {
             let t = try await auth.refresh(clientID: clientID.trimmingCharacters(in: .whitespaces), tenant: tenantValue, refreshToken: r)
             await MainActor.run { apply(t) }
             return t.accessToken
         } catch {
             await MainActor.run { signOut() }
-            throw PowerBIError.message("Session expirée, reconnectez-vous. (\(error.localizedDescription))")
+            throw PowerBIError.message(L("Session expirée, reconnectez-vous. (%@)", error.localizedDescription))
         }
     }
 
@@ -112,10 +112,10 @@ final class PowerBIStore {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {
             switch status {
-            case 401: throw PowerBIError.message("Accès refusé par Power BI (401). Vérifiez votre licence Pro/PPU et les autorisations de l'application.")
-            case 403: throw PowerBIError.message("Accès interdit (403) : vous n'avez pas les droits sur cet élément.")
-            case 404: throw PowerBIError.message("Élément introuvable (404).")
-            default: throw PowerBIError.message("Erreur Power BI (\(status)).")
+            case 401: throw PowerBIError.message(L("Accès refusé par Power BI (401). Vérifiez votre licence Pro/PPU et les autorisations de l'application."))
+            case 403: throw PowerBIError.message(L("Accès interdit (403) : vous n'avez pas les droits sur cet élément."))
+            case 404: throw PowerBIError.message(L("Élément introuvable (404)."))
+            default: throw PowerBIError.message(L("Erreur Power BI (%@).", status))
             }
         }
         return try JSONDecoder().decode(T.self, from: data)
@@ -157,7 +157,7 @@ final class PowerBIStore {
     func openLink(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), let host = url.host?.lowercased(), host.hasSuffix("powerbi.com") else {
-            error = "Collez un lien app.powerbi.com."
+            error = L("Collez un lien app.powerbi.com.")
             return
         }
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -171,7 +171,7 @@ final class PowerBIStore {
             return parts[i + 1]
         }
         let reportID = after("reports") ?? comps?.queryItems?.first { $0.name.lowercased() == "reportid" }?.value
-        guard let reportID else { error = "Ce lien ne désigne pas un rapport."; return }
+        guard let reportID else { error = L("Ce lien ne désigne pas un rapport."); return }
         let group = after("groups") ?? comps?.queryItems?.first { $0.name.lowercased() == "groupid" }?.value
         let app = after("apps")
         await run {

@@ -39,7 +39,7 @@ struct ContentView: View {
                     if state.showFilters {
                         FiltersPane().frame(width: 220)
                     } else {
-                        CollapsedPaneStrip(title: "Filtres", count: state.activeFilterCount) { state.showFilters = true }
+                        CollapsedPaneStrip(title: L("Filtres"), count: state.activeFilterCount) { state.showFilters = true }
                     }
                     Divider()
                     VisualizationsPane().frame(width: 236)
@@ -58,10 +58,11 @@ struct ContentView: View {
                 }
             }
         }
+        .id(state.language)
         .navigationTitle(state.windowTitle)
         .overlay {
             if state.isImporting {
-                ProgressView("Chargement des données…")
+                ProgressView(L("Chargement des données…"))
                     .padding(24)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
@@ -69,7 +70,7 @@ struct ContentView: View {
         .sheet(item: Binding(get: { state.measureDraft }, set: { state.measureDraft = $0 })) { d in
             MeasureEditor(draft: d).environment(state)
         }
-        .alert("Prisme", isPresented: Binding(get: { state.alertMessage != nil },
+        .alert(L("Prisme"), isPresented: Binding(get: { state.alertMessage != nil },
                                               set: { if !$0 { state.alertMessage = nil } })) {
             Button("OK") {}
         } message: {
@@ -86,27 +87,27 @@ struct RibbonView: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            RibbonGroup("Fichier") {
-                RibbonButton("Ouvrir", "folder") { state.openDocument() }
-                RibbonButton("Enregistrer", "square.and.arrow.down") { state.save() }
-                RibbonButton("Annuler", "arrow.uturn.backward") { state.undo() }.disabled(!state.canUndo)
-                RibbonButton("Rétablir", "arrow.uturn.forward") { state.redo() }.disabled(!state.canRedo)
+            RibbonGroup(L("Fichier")) {
+                RibbonButton(L("Ouvrir"), "folder") { state.openDocument() }
+                RibbonButton(L("Enregistrer"), "square.and.arrow.down") { state.save() }
+                RibbonButton(L("Annuler|undo"), "arrow.uturn.backward") { state.undo() }.disabled(!state.canUndo)
+                RibbonButton(L("Rétablir"), "arrow.uturn.forward") { state.redo() }.disabled(!state.canRedo)
             }
             RibbonDivider()
-            RibbonGroup("Données") {
-                RibbonButton("Obtenir des données", "cylinder.split.1x2") { state.importWithPanel() }
-                RibbonButton("Exemple", "sparkles") { state.loadSample() }
-                RibbonButton("Actualiser", "arrow.clockwise") { state.refreshAll() }
+            RibbonGroup(L("Données")) {
+                RibbonButton(L("Obtenir des données"), "cylinder.split.1x2") { state.importWithPanel() }
+                RibbonButton(L("Exemple"), "sparkles") { state.loadSample() }
+                RibbonButton(L("Actualiser"), "arrow.clockwise") { state.refreshAll() }
                     .disabled(state.tables.isEmpty)
             }
             RibbonDivider()
-            RibbonGroup("Calculs") {
-                RibbonButton("Nouvelle mesure", "function") { state.newMeasure() }
+            RibbonGroup(L("Calculs")) {
+                RibbonButton(L("Nouvelle mesure"), "function") { state.newMeasure() }
                     .disabled(state.tables.isEmpty)
             }
             RibbonDivider()
-            RibbonGroup("Insérer") {
-                RibbonButton("Nouveau visuel", "chart.bar.xaxis") { showVisualPicker.toggle() }
+            RibbonGroup(L("Insérer")) {
+                RibbonButton(L("Nouveau visuel"), "chart.bar.xaxis") { showVisualPicker.toggle() }
                     .popover(isPresented: $showVisualPicker, arrowEdge: .bottom) {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(VisualType.allCases) { t in
@@ -126,13 +127,13 @@ struct RibbonView: View {
                         .padding(8)
                         .frame(width: 200)
                     }
-                RibbonButton("Nouvelle page", "doc.badge.plus") { state.mode = .report; state.addPage() }
+                RibbonButton(L("Nouvelle page"), "doc.badge.plus") { state.mode = .report; state.addPage() }
             }
             RibbonDivider()
-            RibbonGroup("Visuel") {
-                RibbonButton("Dupliquer", "plus.square.on.square") { state.duplicateVisual() }
+            RibbonGroup(L("Visuel")) {
+                RibbonButton(L("Dupliquer"), "plus.square.on.square") { state.duplicateVisual() }
                     .disabled(state.selectedVisualID == nil)
-                RibbonButton("Supprimer", "trash") { state.deleteVisual() }
+                RibbonButton(L("Supprimer"), "trash") { state.deleteVisual() }
                     .disabled(state.selectedVisualID == nil)
             }
             Spacer()
@@ -209,11 +210,11 @@ struct ModeRail: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            item(.report, "chart.bar.doc.horizontal", "Rapport")
-            item(.data, "tablecells", "Données")
-            item(.model, "point.3.connected.trianglepath.dotted", "Modèle")
+            item(.report, "chart.bar.doc.horizontal", L("Rapport"))
+            item(.data, "tablecells", L("Données"))
+            item(.model, "point.3.connected.trianglepath.dotted", L("Modèle"))
             Divider().frame(width: 30).padding(.vertical, 2)
-            item(.powerbi, "cloud", "Power BI")
+            item(.powerbi, "cloud", L("Power BI"))
             Spacer()
         }
         .padding(.vertical, 10)
@@ -257,12 +258,12 @@ struct PageTabsBar: View {
                         Image(systemName: "plus").frame(width: 28, height: 26).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Nouvelle page")
+                    .help(L("Nouvelle page"))
                 }
                 .padding(.horizontal, 8)
             }
             Spacer(minLength: 0)
-            Text("Page \(state.pageIndex + 1) sur \(state.pages.count)")
+            Text(L("Page %@ sur %@", state.pageIndex + 1, state.pages.count))
                 .font(.caption).foregroundStyle(.secondary).padding(.trailing, 12)
         }
         .frame(height: 34)
@@ -295,9 +296,9 @@ struct PageTabsBar: View {
         .onTapGesture(count: 2) { startRename(p) }
         .onTapGesture { state.selectPage(p.id) }
         .contextMenu {
-            Button("Renommer") { startRename(p) }
-            Button("Dupliquer") { state.duplicatePage(p.id) }
-            Button("Supprimer", role: .destructive) { state.deletePage(p.id) }.disabled(state.pages.count < 2)
+            Button(L("Renommer")) { startRename(p) }
+            Button(L("Dupliquer")) { state.duplicatePage(p.id) }
+            Button(L("Supprimer"), role: .destructive) { state.deletePage(p.id) }.disabled(state.pages.count < 2)
         }
     }
 
@@ -345,6 +346,24 @@ struct CollapsedPaneStrip: View {
         }
         .buttonStyle(.plain)
         .background(.background)
-        .help("Afficher le volet \(title)")
+        .help(L("Afficher le volet %@", title))
+    }
+}
+
+/// Settings window (⌘,).
+struct SettingsView: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        @Bindable var state = state
+        Form {
+            Picker(L("Langue de l'interface"), selection: $state.language) {
+                ForEach(AppLanguage.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.radioGroup)
+        }
+        .padding(20)
+        .frame(width: 380)
+        .id(state.language)
     }
 }

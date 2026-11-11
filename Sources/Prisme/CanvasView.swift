@@ -48,17 +48,17 @@ struct EmptyPageView: View {
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(Theme.accent)
             if state.tables.isEmpty {
-                Text("Ajouter des données à votre rapport").font(.title2.weight(.semibold))
-                Text("Importez un fichier CSV ou Excel (ou glissez-le ici), puis construisez vos visuels.")
+                Text(L("Ajouter des données à votre rapport")).font(.title2.weight(.semibold))
+                Text(L("Importez un fichier CSV ou Excel (ou glissez-le ici), puis construisez vos visuels."))
                     .foregroundStyle(.secondary)
                 HStack {
-                    Button("Importer un fichier…") { state.importWithPanel() }.buttonStyle(.borderedProminent)
-                    Button("Utiliser les données d'exemple") { state.loadSample() }
+                    Button(L("Importer un fichier…")) { state.importWithPanel() }.buttonStyle(.borderedProminent)
+                    Button(L("Utiliser les données d'exemple")) { state.loadSample() }
                 }
                 .controlSize(.large)
             } else {
-                Text("Créez votre premier visuel").font(.title2.weight(.semibold))
-                Text("Choisissez un type dans le volet Visualisations, ou cliquez sur un champ du volet Données.")
+                Text(L("Créez votre premier visuel")).font(.title2.weight(.semibold))
+                Text(L("Choisissez un type dans le volet Visualisations, ou cliquez sur un champ du volet Données."))
                     .foregroundStyle(.secondary)
             }
         }
@@ -117,19 +117,19 @@ struct VisualContainer: View {
             )
             .onHover { hover = $0 }
             .contextMenu {
-                Button("Dupliquer") { state.duplicateVisual(visual.id) }
-                Button("Mettre au premier plan") { state.bringToFront(visual.id) }
+                Button(L("Dupliquer")) { state.duplicateVisual(visual.id) }
+                Button(L("Mettre au premier plan")) { state.bringToFront(visual.id) }
                 Divider()
-                Button("Supprimer", role: .destructive) { state.deleteVisual(visual.id) }
+                Button(L("Supprimer"), role: .destructive) { state.deleteVisual(visual.id) }
             }
     }
 
     private var headerMenu: some View {
         Menu {
-            Button("Dupliquer") { state.duplicateVisual(visual.id) }
-            Button("Mettre au premier plan") { state.bringToFront(visual.id) }
+            Button(L("Dupliquer")) { state.duplicateVisual(visual.id) }
+            Button(L("Mettre au premier plan")) { state.bringToFront(visual.id) }
             Divider()
-            Button("Supprimer", role: .destructive) { state.deleteVisual(visual.id) }
+            Button(L("Supprimer"), role: .destructive) { state.deleteVisual(visual.id) }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 11, weight: .bold))

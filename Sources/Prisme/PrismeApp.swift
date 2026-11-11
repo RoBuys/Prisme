@@ -45,38 +45,43 @@ struct PrismeApp: App {
                 .frame(minWidth: 1100, minHeight: 680)
         }
         .defaultSize(width: 1480, height: 920)
+
+        Settings {
+            SettingsView().environment(state)
+        }
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Nouveau rapport") { state.newDocument() }.keyboardShortcut("n")
-                Button("Ouvrir…") { state.openDocument() }.keyboardShortcut("o")
+                let _ = state.language   // rebuild menus when the language changes
+                Button(L("Nouveau rapport")) { state.newDocument() }.keyboardShortcut("n")
+                Button(L("Ouvrir…")) { state.openDocument() }.keyboardShortcut("o")
                 Divider()
-                Button("Obtenir des données…") { state.importWithPanel() }.keyboardShortcut("i")
-                Button("Charger les données d'exemple") { state.loadSample() }
-                Button("Actualiser les données") { state.refreshAll() }.keyboardShortcut("r")
+                Button(L("Obtenir des données…")) { state.importWithPanel() }.keyboardShortcut("i")
+                Button(L("Charger les données d'exemple")) { state.loadSample() }
+                Button(L("Actualiser les données")) { state.refreshAll() }.keyboardShortcut("r")
             }
             CommandGroup(replacing: .undoRedo) {
-                Button("Annuler") { Self.undoOrTextUndo(redo: false) }.keyboardShortcut("z")
-                Button("Rétablir") { Self.undoOrTextUndo(redo: true) }.keyboardShortcut("z", modifiers: [.command, .shift])
+                Button(L("Annuler|undo")) { Self.undoOrTextUndo(redo: false) }.keyboardShortcut("z")
+                Button(L("Rétablir")) { Self.undoOrTextUndo(redo: true) }.keyboardShortcut("z", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .saveItem) {
-                Button("Enregistrer") { state.save() }.keyboardShortcut("s")
-                Button("Enregistrer sous…") { state.saveAs() }.keyboardShortcut("s", modifiers: [.command, .shift])
+                Button(L("Enregistrer")) { state.save() }.keyboardShortcut("s")
+                Button(L("Enregistrer sous…")) { state.saveAs() }.keyboardShortcut("s", modifiers: [.command, .shift])
             }
-            CommandMenu("Visuel") {
-                Menu("Nouveau visuel") {
+            CommandMenu(L("Visuel")) {
+                Menu(L("Nouveau visuel")) {
                     ForEach(VisualType.allCases) { t in
                         Button(t.label) { state.mode = .report; state.addVisual(t) }
                     }
                 }
                 Divider()
-                Button("Dupliquer") { state.duplicateVisual() }
+                Button(L("Dupliquer")) { state.duplicateVisual() }
                     .keyboardShortcut("d")
                     .disabled(state.selectedVisualID == nil)
-                Button("Supprimer") { state.deleteVisual() }
+                Button(L("Supprimer")) { state.deleteVisual() }
                     .keyboardShortcut(.delete, modifiers: .command)
                     .disabled(state.selectedVisualID == nil)
                 Divider()
-                Button("Nouvelle page") { state.addPage() }.keyboardShortcut("t")
+                Button(L("Nouvelle page")) { state.addPage() }.keyboardShortcut("t")
             }
         }
     }

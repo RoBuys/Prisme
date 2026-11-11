@@ -8,9 +8,9 @@ enum ColumnType: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
-        case .number: "Nombre"
-        case .text: "Texte"
-        case .date: "Date"
+        case .number: L("Nombre")
+        case .text: L("Texte")
+        case .date: L("Date")
         }
     }
 
@@ -116,10 +116,10 @@ enum DateLevel: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
-        case .year: "Année"
-        case .quarter: "Trimestre"
-        case .month: "Mois"
-        case .day: "Jour"
+        case .year: L("Année")
+        case .quarter: L("Trimestre")
+        case .month: L("Mois")
+        case .day: L("Jour")
         }
     }
 }
@@ -159,12 +159,12 @@ enum Aggregation: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
-        case .sum: "Somme"
-        case .average: "Moyenne"
-        case .min: "Minimum"
-        case .max: "Maximum"
-        case .count: "Nombre"
-        case .distinctCount: "Nombre (distinct)"
+        case .sum: L("Somme")
+        case .average: L("Moyenne")
+        case .min: L("Minimum")
+        case .max: L("Maximum")
+        case .count: L("Nombre")
+        case .distinctCount: L("Nombre (distinct)")
         }
     }
 
@@ -183,8 +183,8 @@ struct ValueField: Hashable, Codable, Identifiable {
     var displayName: String {
         if measure { return field.column }
         switch aggregation {
-        case .distinctCount: return "Nombre distinct de \(field.column)"
-        default: return "\(aggregation.label) de \(field.column)"
+        case .distinctCount: return L("Nombre distinct de %@", field.column)
+        default: return L("%@ de %@", aggregation.label, field.column)
         }
     }
 }
@@ -197,15 +197,15 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .column: "Histogramme"
-        case .bar: "Graphique à barres"
-        case .line: "Courbe"
-        case .area: "Aires"
-        case .pie: "Secteurs"
-        case .donut: "Anneau"
-        case .card: "Carte"
-        case .table: "Tableau"
-        case .slicer: "Segment"
+        case .column: L("Histogramme")
+        case .bar: L("Graphique à barres")
+        case .line: L("Courbe")
+        case .area: L("Aires")
+        case .pie: L("Secteurs")
+        case .donut: L("Anneau")
+        case .card: L("Carte")
+        case .table: L("Tableau")
+        case .slicer: L("Segment")
         }
     }
 
@@ -259,8 +259,8 @@ struct Visual: Identifiable, Hashable, Codable {
             let v = (type.isPie ? Array(values.prefix(1)) : values).map(\.displayName).joined(separator: ", ")
             guard !v.isEmpty else { return type.label }
             var t = v
-            if let a = axis.first { t += " par \(a.displayName)" }
-            if type.isCartesian, let l = legend { t += " et \(l.displayName)" }
+            if let a = axis.first { t += L(" par %@", a.displayName) }
+            if type.isCartesian, let l = legend { t += L(" et %@", l.displayName) }
             return t
         }
     }
@@ -293,11 +293,11 @@ enum MeasureFormat: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
-        case .auto: "Automatique"
-        case .integer: "Nombre entier"
-        case .decimal: "Décimal (2)"
-        case .percent: "Pourcentage"
-        case .currency: "Monétaire (€)"
+        case .auto: L("Automatique")
+        case .integer: L("Nombre entier")
+        case .decimal: L("Décimal (2)")
+        case .percent: L("Pourcentage")
+        case .currency: L("Monétaire (€)")
         }
     }
 }

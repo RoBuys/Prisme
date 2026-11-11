@@ -15,8 +15,8 @@ struct ModelView: View {
             VStack(spacing: 12) {
                 Image(systemName: "point.3.connected.trianglepath.dotted")
                     .font(.system(size: 40, weight: .light)).foregroundStyle(.secondary)
-                Text("Aucune table").font(.title3.weight(.semibold))
-                Button("Obtenir des données…") { state.importWithPanel() }
+                Text(L("Aucune table")).font(.title3.weight(.semibold))
+                Button(L("Obtenir des données…")) { state.importWithPanel() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -142,7 +142,7 @@ struct TableCard: View {
                 ColumnRow(table: table, column: c)
             }
             if table.columns.count > ModelView.maxRows {
-                Text("+ \(table.columns.count - ModelView.maxRows) autres colonnes")
+                Text(L("+ %@ autres colonnes", table.columns.count - ModelView.maxRows))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .padding(.horizontal, 10).frame(height: ModelView.rowHeight)
             }
@@ -187,7 +187,7 @@ private struct ColumnRow: View {
             if let msg = state.addRelationship(other, field) { state.alertMessage = msg }
             return true
         } isTargeted: { targeted = $0 }
-        .help("Glissez cette colonne sur une colonne d'une autre table pour créer une relation")
+        .help(L("Glissez cette colonne sur une colonne d'une autre table pour créer une relation"))
     }
 }
 
@@ -202,20 +202,20 @@ struct RelationshipsPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: "Relations")
+            PaneHeader(title: L("Relations"))
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if state.relationships.isEmpty {
-                        Text("Aucune relation. Glissez une colonne sur une colonne d'une autre table, ou utilisez le formulaire ci-dessous.")
+                        Text(L("Aucune relation. Glissez une colonne sur une colonne d'une autre table, ou utilisez le formulaire ci-dessous."))
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     ForEach(state.relationships) { r in row(r) }
                     Button {
                         let n = state.detectRelationships()
-                        state.alertMessage = n == 0 ? "Aucune nouvelle relation détectée."
-                            : "\(n) relation\(n > 1 ? "s" : "") créée\(n > 1 ? "s" : "")."
+                        state.alertMessage = n == 0 ? L("Aucune nouvelle relation détectée.")
+                            : (n == 1 ? L("1 relation créée.") : L("%@ relations créées.", n))
                     } label: {
-                        Label("Détecter automatiquement", systemImage: "wand.and.stars")
+                        Label(L("Détecter automatiquement"), systemImage: "wand.and.stars")
                     }
                     .disabled(state.tables.count < 2)
                     Divider()
@@ -243,9 +243,9 @@ struct RelationshipsPane: View {
                 }
                 Spacer()
                 Button { state.deleteRelationship(r.id) } label: { Image(systemName: "trash") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Supprimer la relation")
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help(L("Supprimer la relation"))
             }
-            Toggle("Active", isOn: Binding(get: { r.isActive }, set: { state.setRelationshipActive(r.id, $0) }))
+            Toggle(L("Active"), isOn: Binding(get: { r.isActive }, set: { state.setRelationshipActive(r.id, $0) }))
                 .toggleStyle(.switch).controlSize(.mini).font(.system(size: 11))
         }
         .padding(8)
@@ -254,20 +254,20 @@ struct RelationshipsPane: View {
 
     private var newRelationshipForm: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Nouvelle relation").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            tablePicker("Table", $fromTable)
+            Text(L("Nouvelle relation")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            tablePicker(L("Table"), $fromTable)
             columnPicker(fromTable, $fromColumn)
             Image(systemName: "arrow.down").font(.system(size: 10)).foregroundStyle(.secondary)
-            tablePicker("Table liée", $toTable)
+            tablePicker(L("Table liée"), $toTable)
             columnPicker(toTable, $toColumn)
-            Button("Créer la relation") {
+            Button(L("Créer la relation")) {
                 if let msg = state.addRelationship(FieldRef(table: fromTable, column: fromColumn),
                                                    FieldRef(table: toTable, column: toColumn)) {
                     state.alertMessage = msg
                 }
             }
             .disabled(fromTable.isEmpty || toTable.isEmpty || fromColumn.isEmpty || toColumn.isEmpty || fromTable == toTable)
-            Text("Le sens « plusieurs → un » est déterminé automatiquement d'après les valeurs uniques. Les filtres se propagent du côté « 1 » vers le côté « * ».")
+            Text(L("Le sens « plusieurs → un » est déterminé automatiquement d'après les valeurs uniques. Les filtres se propagent du côté « 1 » vers le côté « * »."))
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
         .controlSize(.small)
@@ -282,7 +282,7 @@ struct RelationshipsPane: View {
     }
 
     private func columnPicker(_ table: String, _ selection: Binding<String>) -> some View {
-        Picker("Colonne", selection: selection) {
+        Picker(L("Colonne"), selection: selection) {
             Text("—").tag("")
             ForEach(Engine.table(named: table, in: state.tables)?.columns ?? []) { Text($0.name).tag($0.name) }
         }

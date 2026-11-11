@@ -174,7 +174,7 @@ struct PieChartView: View {
                             let frame = geo[pf]
                             VStack(spacing: 0) {
                                 Text(Fmt.compact(total)).font(.system(size: 17, weight: .semibold))
-                                Text("Total").font(.system(size: 10)).foregroundStyle(.secondary)
+                                Text(L("Total")).font(.system(size: 10)).foregroundStyle(.secondary)
                             }
                             .position(x: frame.midX, y: frame.midY)
                         }
@@ -225,7 +225,7 @@ struct CardVisualView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            PlaceholderView(message: "Ajoutez un champ dans « Champs »", symbol: "123.rectangle")
+            PlaceholderView(message: L("Ajoutez un champ dans « Champs »"), symbol: "123.rectangle")
         }
     }
 }
@@ -255,7 +255,7 @@ struct TableVisualView: View {
                                 .onTapGesture { onSelect(key) }
                         }
                         if data.totalRowCount > data.rows.count {
-                            Text("… \(data.totalRowCount - data.rows.count) lignes supplémentaires")
+                            Text(L("… %@ lignes supplémentaires", data.totalRowCount - data.rows.count))
                                 .font(.system(size: 10)).foregroundStyle(.secondary).padding(6)
                         }
                     } header: {
@@ -313,14 +313,14 @@ struct SlicerView: View {
                 if all.count > 8 {
                     HStack(spacing: 4) {
                         Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(.secondary)
-                        TextField("Rechercher", text: $search).textFieldStyle(.plain).font(.system(size: 11))
+                        TextField(L("Rechercher"), text: $search).textFieldStyle(.plain).font(.system(size: 11))
                     }
                     .padding(4)
                     .background(RoundedRectangle(cornerRadius: 4).stroke(Color.black.opacity(0.12)))
                 }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        item("Tout sélectionner", checked: visual.slicerSelection.isEmpty) {
+                        item(L("Tout sélectionner"), checked: visual.slicerSelection.isEmpty) {
                             state.clearSlicer(visual.id)
                         }
                         ForEach(values, id: \.self) { v in
@@ -330,7 +330,7 @@ struct SlicerView: View {
                 }
             }
         } else {
-            PlaceholderView(message: "Ajoutez un champ dans « Champ »", symbol: VisualType.slicer.symbol)
+            PlaceholderView(message: L("Ajoutez un champ dans « Champ »"), symbol: VisualType.slicer.symbol)
         }
     }
 

@@ -111,12 +111,19 @@ final class AppState {
     }
     var isImporting = false
     var showFilters = false
+    /// Interface language; changing it rebuilds the UI.
+    var language: AppLanguage = Loc.language {
+        didSet {
+            Loc.language = language
+            UserDefaults.standard.set(language.rawValue, forKey: "prisme.language")
+        }
+    }
     var alertMessage: String?
 
     static let reportType = UTType("local.prisme.report") ?? UTType(filenameExtension: "prisme", conformingTo: .json) ?? .json
 
     init() {
-        let p = ReportPage(name: "Page 1")
+        let p = ReportPage(name: L("Page 1"))
         pages = [p]
         currentPageID = p.id
         resetHistory()
@@ -144,8 +151,8 @@ final class AppState {
     func measure(for f: FieldRef) -> Measure? { measures.first { $0.table == f.table && $0.name == f.column } }
 
     var windowTitle: String {
-        let name = fileURL?.deletingPathExtension().lastPathComponent ?? "Sans titre"
-        return isDirty ? "\(name) — modifié" : name
+        let name = fileURL?.deletingPathExtension().lastPathComponent ?? L("Sans titre")
+        return isDirty ? L("%@ — modifié", name) : name
     }
 
     // MARK: Mutation helpers
@@ -389,7 +396,7 @@ final class AppState {
     }
 
     func addPage() {
-        let p = ReportPage(name: "Page \(pages.count + 1)")
+        let p = ReportPage(name: L("Page %@", pages.count + 1))
         pages.append(p)
         didChange()
         selectPage(p.id)
@@ -399,7 +406,7 @@ final class AppState {
         guard let i = pages.firstIndex(where: { $0.id == id }) else { return }
         var p = pages[i]
         p.id = UUID()
-        p.name += " (copie)"
+        p.name += L(" (copie)")
         p.visuals = p.visuals.map { var v = $0; v.id = UUID(); return v }
         p.filters = p.filters.map { var f = $0; f.id = UUID(); return f }
         pages.insert(p, at: i + 1)
@@ -431,7 +438,7 @@ final class AppState {
 
     func importWithPanel() {
         let panel = NSOpenPanel()
-        panel.title = "Obtenir des données"
+        panel.title = L("Obtenir des données")
         panel.allowsMultipleSelection = true
         panel.allowedContentTypes = Importer.supportedExtensions.compactMap { UTType(filenameExtension: $0) }
         guard panel.runModal() == .OK else { return }
@@ -471,7 +478,7 @@ final class AppState {
     func refreshAll() {
         let sources = tables.compactMap { t in t.source.map { (t.name, $0) } }
         guard !sources.isEmpty else {
-            alertMessage = "Aucune table n'est liée à un fichier source."
+            alertMessage = L("Aucune table n'est liée à un fichier source.")
             return
         }
         isImporting = true
@@ -485,7 +492,7 @@ final class AppState {
                     if let t = loaded.first(where: { src.sheet == nil || $0.source?.sheet == src.sheet }) {
                         updates[name] = t
                     } else {
-                        errors.append("« \(name) » : feuille introuvable dans \(url.lastPathComponent).")
+                        errors.append(L("« %@ » : feuille introuvable dans %@.", name, url.lastPathComponent))
                     }
                 } catch {
                     errors.append("« \(name) » : \(error.localizedDescription)")
@@ -577,7 +584,7 @@ final class AppState {
     }
 
     func loadSample() {
-        let sample = SampleData.make(names: (uniqueTableName("Ventes"), uniqueTableName("Produits"), uniqueTableName("Régions")))
+        let sample = SampleData.make(names: (uniqueTableName(L("Ventes")), uniqueTableName(L("Produits")), uniqueTableName(L("Régions"))))
         tables += sample.tables
         dataTableName = sample.tables[0].name
         detectRelationships(for: sample.tables.map(\.name))
@@ -599,18 +606,18 @@ final class AppState {
     /// Returns an error message, or nil on success.
     @discardableResult
     func addRelationship(_ a: FieldRef, _ b: FieldRef) -> String? {
-        guard a.table != b.table else { return "Les deux colonnes doivent appartenir à des tables différentes." }
-        guard column(for: a) != nil, column(for: b) != nil else { return "Colonne introuvable." }
+        guard a.table != b.table else { return L("Les deux colonnes doivent appartenir à des tables différentes.") }
+        guard column(for: a) != nil, column(for: b) != nil else { return L("Colonne introuvable.") }
         let m = model
         let aUnique = m.isUnique(table: a.table, column: a.column)
         let bUnique = m.isUnique(table: b.table, column: b.column)
         guard aUnique || bUnique else {
-            return "Aucune des deux colonnes (« \(a.column) », « \(b.column) ») ne contient de valeurs uniques : les relations plusieurs-à-plusieurs ne sont pas prises en charge."
+            return L("Aucune des deux colonnes (« %@ », « %@ ») ne contient de valeurs uniques : les relations plusieurs-à-plusieurs ne sont pas prises en charge.", a.column, b.column)
         }
         let (many, one) = bUnique ? (a, b) : (b, a)
         if relationships.contains(where: { $0.fromTable == many.table && $0.fromColumn == many.column
             && $0.toTable == one.table && $0.toColumn == one.column }) {
-            return "Cette relation existe déjà."
+            return L("Cette relation existe déjà.")
         }
         // A second path between the same tables would be ambiguous: keep it inactive.
         let active = !m.connected(many.table, one.table)
@@ -618,7 +625,7 @@ final class AppState {
                                           toTable: one.table, toColumn: one.column, isActive: active))
         didChange()
         crossFilter = nil
-        return active ? nil : "Relation créée mais inactive : ces tables sont déjà reliées par un autre chemin."
+        return active ? nil : L("Relation créée mais inactive : ces tables sont déjà reliées par un autre chemin.")
     }
 
     func deleteRelationship(_ id: UUID) {
@@ -633,7 +640,7 @@ final class AppState {
             var others = model
             others.relationships.remove(at: i)
             if others.connected(relationships[i].fromTable, relationships[i].toTable) {
-                alertMessage = "Impossible d'activer cette relation : les tables sont déjà reliées par un autre chemin actif. Désactivez-le d'abord."
+                alertMessage = L("Impossible d'activer cette relation : les tables sont déjà reliées par un autre chemin actif. Désactivez-le d'abord.")
                 return
             }
         }
@@ -671,8 +678,8 @@ final class AppState {
 
     func newMeasure(in table: String? = nil) {
         guard let home = table ?? dataTableName ?? tables.first?.name else { return }
-        var n = "Mesure", k = 2
-        while !isMeasureNameFree(n, excluding: nil, table: home) { n = "Mesure \(k)"; k += 1 }
+        var n = L("Mesure"), k = 2
+        while !isMeasureNameFree(n, excluding: nil, table: home) { n = L("Mesure %@", k); k += 1 }
         measureDraft = MeasureDraft(id: nil, name: n, table: home, expression: "", format: .auto)
     }
 
@@ -691,10 +698,10 @@ final class AppState {
     /// Validates and stores a draft. Returns an error message, or nil on success.
     func saveMeasure(_ d: MeasureDraft) -> String? {
         let name = d.name.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return "Donnez un nom à la mesure." }
-        guard !name.contains("[") && !name.contains("]") else { return "Le nom ne peut pas contenir de crochets." }
+        guard !name.isEmpty else { return L("Donnez un nom à la mesure.") }
+        guard !name.contains("[") && !name.contains("]") else { return L("Le nom ne peut pas contenir de crochets.") }
         guard isMeasureNameFree(name, excluding: d.id, table: d.table) else {
-            return "Le nom « \(name) » est déjà utilisé par une autre mesure ou une colonne."
+            return L("Le nom « %@ » est déjà utilisé par une autre mesure ou une colonne.", name)
         }
         var probe = model
         probe.measures.removeAll { $0.id == d.id }
@@ -770,11 +777,11 @@ final class AppState {
     func confirmDiscard() -> Bool {
         guard isDirty else { return true }
         let alert = NSAlert()
-        alert.messageText = "Voulez-vous enregistrer les modifications apportées à « \(fileURL?.deletingPathExtension().lastPathComponent ?? "Sans titre") » ?"
-        alert.informativeText = "Vos modifications seront perdues si vous ne les enregistrez pas."
-        alert.addButton(withTitle: "Enregistrer")
-        alert.addButton(withTitle: "Annuler")
-        alert.addButton(withTitle: "Ne pas enregistrer")
+        alert.messageText = L("Voulez-vous enregistrer les modifications apportées à « %@ » ?", fileURL?.deletingPathExtension().lastPathComponent ?? "Sans titre")
+        alert.informativeText = L("Vos modifications seront perdues si vous ne les enregistrez pas.")
+        alert.addButton(withTitle: L("Enregistrer"))
+        alert.addButton(withTitle: L("Annuler"))
+        alert.addButton(withTitle: L("Ne pas enregistrer"))
         switch alert.runModal() {
         case .alertFirstButtonReturn: return save()
         case .alertThirdButtonReturn: return true
@@ -784,7 +791,7 @@ final class AppState {
 
     func newDocument() {
         guard confirmDiscard() else { return }
-        let p = ReportPage(name: "Page 1")
+        let p = ReportPage(name: L("Page 1"))
         tables = []
         relationships = []
         measures = []
@@ -816,7 +823,7 @@ final class AppState {
             relationships = doc.relationships
             measures = doc.measures
             modelLayout = doc.modelLayout
-            pages = doc.pages.isEmpty ? [ReportPage(name: "Page 1")] : doc.pages
+            pages = doc.pages.isEmpty ? [ReportPage(name: L("Page 1"))] : doc.pages
             currentPageID = pages[0].id
             selectedVisualID = nil
             crossFilter = nil
@@ -826,7 +833,7 @@ final class AppState {
             mode = .report
             resetHistory()
         } catch {
-            alertMessage = "Impossible d'ouvrir « \(url.lastPathComponent) » : \(error.localizedDescription)"
+            alertMessage = L("Impossible d'ouvrir « %@ » : %@", url.lastPathComponent, error.localizedDescription)
         }
     }
 
@@ -840,7 +847,7 @@ final class AppState {
     func saveAs() -> Bool {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [Self.reportType]
-        panel.nameFieldStringValue = (fileURL?.deletingPathExtension().lastPathComponent ?? "Rapport") + ".prisme"
+        panel.nameFieldStringValue = (fileURL?.deletingPathExtension().lastPathComponent ?? L("Rapport")) + ".prisme"
         guard panel.runModal() == .OK, let url = panel.url else { return false }
         return write(to: url)
     }
@@ -853,7 +860,7 @@ final class AppState {
             isDirty = false
             return true
         } catch {
-            alertMessage = "Échec de l'enregistrement : \(error.localizedDescription)"
+            alertMessage = L("Échec de l'enregistrement : %@", error.localizedDescription)
             return false
         }
     }

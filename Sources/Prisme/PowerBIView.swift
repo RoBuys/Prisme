@@ -23,38 +23,38 @@ struct PowerBIView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                PaneHeader(title: "Power BI")
+                PaneHeader(title: L("Power BI"))
                 if store.isBusy { ProgressView().controlSize(.small).padding(.trailing, 6) }
                 Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).padding(.trailing, 12).help("Réglages Power BI")
+                    .buttonStyle(.plain).foregroundStyle(.secondary).padding(.trailing, 12).help(L("Réglages Power BI"))
             }
             VStack(alignment: .leading, spacing: 8) {
                 if !store.isConfigured {
-                    Text("Pour accéder à vos rapports, Prisme a besoin de l'identifiant d'une application enregistrée dans Microsoft Entra ID.")
+                    Text(L("Pour accéder à vos rapports, Prisme a besoin de l'identifiant d'une application enregistrée dans Microsoft Entra ID."))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
-                    Button("Configurer…") { showSettings = true }.buttonStyle(.borderedProminent)
+                    Button(L("Configurer…")) { showSettings = true }.buttonStyle(.borderedProminent)
                 } else if !store.isSignedIn {
                     Button {
                         Task { await store.signIn() }
                     } label: {
-                        Label("Se connecter avec Microsoft", systemImage: "person.crop.circle")
+                        Label(L("Se connecter avec Microsoft"), systemImage: "person.crop.circle")
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(store.isBusy)
                 } else {
                     HStack {
                         Image(systemName: "person.crop.circle.fill").foregroundStyle(Theme.accent)
-                        Text(store.userName ?? "Connecté").font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                        Text(store.userName ?? L("Connecté")).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                         Spacer()
                         Menu {
-                            Button("Actualiser la liste") { Task { await store.refreshCatalog() } }
-                            Button("Se déconnecter") { store.signOut() }
+                            Button(L("Actualiser la liste")) { Task { await store.refreshCatalog() } }
+                            Button(L("Se déconnecter")) { store.signOut() }
                         } label: { Image(systemName: "ellipsis.circle") }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     }
                 }
                 HStack(spacing: 4) {
-                    TextField("Coller un lien de rapport…", text: $link)
+                    TextField(L("Coller un lien de rapport…"), text: $link)
                         .textFieldStyle(.roundedBorder).font(.system(size: 11))
                         .onSubmit { Task { await store.openLink(link) } }
                     Button { Task { await store.openLink(link) } } label: { Image(systemName: "arrow.right.circle.fill") }
@@ -68,15 +68,15 @@ struct PowerBIView: View {
             .padding(.bottom, 8)
 
             if store.isSignedIn {
-                TextField("Rechercher un rapport", text: $search)
+                TextField(L("Rechercher un rapport"), text: $search)
                     .textFieldStyle(.roundedBorder).font(.system(size: 11)).padding(.horizontal, 12)
                 List {
-                    Section("Mon espace et partagés avec moi") {
+                    Section(L("Mon espace et partagés avec moi")) {
                         ForEach(filtered(store.myReports)) { reportRow($0) }
-                        if store.myReports.isEmpty { Text("Aucun rapport").foregroundStyle(.secondary).font(.system(size: 11)) }
+                        if store.myReports.isEmpty { Text(L("Aucun rapport")).foregroundStyle(.secondary).font(.system(size: 11)) }
                     }
                     if !store.workspaces.isEmpty {
-                        Section("Espaces de travail") {
+                        Section(L("Espaces de travail")) {
                             ForEach(store.workspaces) { w in
                                 DisclosureGroup {
                                     ForEach(filtered(store.workspaceReports[w.id] ?? [])) { reportRow($0) }
@@ -89,7 +89,7 @@ struct PowerBIView: View {
                         }
                     }
                     if !store.apps.isEmpty {
-                        Section("Applications") {
+                        Section(L("Applications")) {
                             ForEach(store.apps) { a in
                                 DisclosureGroup {
                                     ForEach(filtered(store.appReports[a.id] ?? [])) { reportRow($0) }
@@ -104,7 +104,7 @@ struct PowerBIView: View {
                 .listStyle(.sidebar)
             } else {
                 Spacer()
-                Text("Les liens « Publier sur le web » s'ouvrent sans connexion.")
+                Text(L("Les liens « Publier sur le web » s'ouvrent sans connexion."))
                     .font(.system(size: 10)).foregroundStyle(.tertiary).padding(12)
             }
         }
@@ -138,8 +138,8 @@ struct PowerBIView: View {
         } else {
             VStack(spacing: 12) {
                 Image(systemName: "chart.bar.doc.horizontal").font(.system(size: 40, weight: .light)).foregroundStyle(.secondary)
-                Text("Rapports Power BI").font(.title3.weight(.semibold))
-                Text("Choisissez un rapport dans la liste, ou collez un lien copié depuis app.powerbi.com.")
+                Text(L("Rapports Power BI")).font(.title3.weight(.semibold))
+                Text(L("Choisissez un rapport dans la liste, ou collez un lien copié depuis app.powerbi.com."))
                     .foregroundStyle(.secondary)
             }
             .multilineTextAlignment(.center)
@@ -163,22 +163,22 @@ struct PowerBISettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Réglages Power BI").font(.title3.weight(.semibold))
-            Text("Enregistrez une application dans Microsoft Entra ID (type « Client public / natif », URI de redirection « \(PowerBIAuth.redirectURI) », autorisations déléguées Power BI Service : Report.Read.All, Workspace.Read.All, App.Read.All, Dataset.Read.All), puis collez ici son identifiant. La procédure détaillée est dans le README.")
+            Text(L("Réglages Power BI")).font(.title3.weight(.semibold))
+            Text(L("Enregistrez une application dans Microsoft Entra ID (type « Client public / natif », URI de redirection « %@ », autorisations déléguées Power BI Service : Report.Read.All, Workspace.Read.All, App.Read.All, Dataset.Read.All), puis collez ici son identifiant. La procédure détaillée est dans le README.", PowerBIAuth.redirectURI))
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Form {
-                TextField("ID d'application (client)", text: $store.clientID, prompt: Text("00000000-0000-0000-0000-000000000000"))
-                TextField("Locataire (tenant)", text: $store.tenant, prompt: Text("organizations"))
+                TextField(L("ID d'application (client)"), text: $store.clientID, prompt: Text("00000000-0000-0000-0000-000000000000"))
+                TextField(L("Locataire (tenant)"), text: $store.tenant, prompt: Text("organizations"))
             }
-            Text("Locataire : laissez « organizations » ou indiquez l'ID de répertoire (tenant ID) ou le domaine de votre organisation.")
+            Text(L("Locataire : laissez « organizations » ou indiquez l'ID de répertoire (tenant ID) ou le domaine de votre organisation."))
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
             if !store.clientID.isEmpty && !store.isConfigured {
-                Text("L'identifiant doit être un GUID.").font(.system(size: 11)).foregroundStyle(.red)
+                Text(L("L'identifiant doit être un GUID.")).font(.system(size: 11)).foregroundStyle(.red)
             }
             HStack {
                 Link("Ouvrir le portail Entra", destination: URL(string: "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade")!)
                 Spacer()
-                Button("Terminé") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button(L("Terminé")) { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
@@ -255,8 +255,8 @@ struct PowerBIEmbedView: NSViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
             if type == "error" {
-                let detail = (body["message"] as? String) ?? "Erreur inconnue"
-                Task { @MainActor in self.store.error = "Rapport : \(detail)" }
+                let detail = (body["message"] as? String) ?? L("Erreur inconnue")
+                Task { @MainActor in self.store.error = L("Rapport : %@", detail) }
             }
         }
 

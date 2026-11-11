@@ -1,0 +1,348 @@
+import Foundation
+
+/// Interface language. French strings are the keys; English translations live in `Strings.en`.
+enum AppLanguage: String, CaseIterable, Identifiable {
+    case system, fr, en
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .system: Loc.isEnglish ? "System" : "Système"
+        case .fr: "Français"
+        case .en: "English"
+        }
+    }
+}
+
+enum Loc {
+    static var language = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "prisme.language") ?? "") ?? .system
+
+    static var isEnglish: Bool {
+        switch language {
+        case .en: true
+        case .fr: false
+        case .system: !(Locale.preferredLanguages.first ?? "fr").hasPrefix("fr")
+        }
+    }
+}
+
+/// Translates a French UI string. `%@` placeholders are replaced, in order, by `args`.
+/// A `|context` suffix disambiguates identical French words ("Annuler|undo" vs "Annuler").
+func L(_ key: String, _ args: Any...) -> String {
+    let french = key.split(separator: "|", maxSplits: 1).first.map(String.init) ?? key
+    var s = Loc.isEnglish ? (Strings.en[key] ?? french) : french
+    for a in args {
+        guard let r = s.range(of: "%@") else { break }
+        s.replaceSubrange(r, with: "\(a)")
+    }
+    return s
+}
+
+enum Strings {
+    static let en: [String: String] = [
+        // Document & app
+        "Page 1": "Page 1",
+        "Sans titre": "Untitled",
+        "%@ — modifié": "%@ — edited",
+        "Page %@": "Page %@",
+        " (copie)": " (copy)",
+        "Prisme": "Prisme",
+        "Fichier": "File",
+        "Ouvrir": "Open",
+        "Ouvrir…": "Open…",
+        "Enregistrer": "Save",
+        "Enregistrer sous…": "Save As…",
+        "Annuler": "Cancel",
+        "Annuler|undo": "Undo",
+        "Rétablir": "Redo",
+        "Nouveau rapport": "New Report",
+        "Ne pas enregistrer": "Don't Save",
+        "Voulez-vous enregistrer les modifications apportées à « %@ » ?": "Do you want to save the changes made to “%@”?",
+        "Vos modifications seront perdues si vous ne les enregistrez pas.": "Your changes will be lost if you don't save them.",
+        "Impossible d'ouvrir « %@ » : %@": "Couldn't open “%@”: %@",
+        "Rapport": "Report",
+        "Échec de l'enregistrement : %@": "Saving failed: %@",
+        "Chargement des données…": "Loading data…",
+
+        // Ribbon & navigation
+        "Données": "Data",
+        "Obtenir des données": "Get data",
+        "Obtenir des données…": "Get Data…",
+        "Exemple": "Sample",
+        "Actualiser": "Refresh",
+        "Actualiser les données": "Refresh Data",
+        "Charger les données d'exemple": "Load Sample Data",
+        "Calculs": "Calculations",
+        "Nouvelle mesure": "New measure",
+        "Nouvelle mesure…": "New Measure…",
+        "Insérer": "Insert",
+        "Nouveau visuel": "New visual",
+        "Nouvelle page": "New page",
+        "Visuel": "Visual",
+        "Dupliquer": "Duplicate",
+        "Supprimer": "Delete",
+        "Modèle": "Model",
+        "Power BI": "Power BI",
+        "Filtres": "Filters",
+        "Afficher le volet %@": "Show the %@ pane",
+        "Page %@ sur %@": "Page %@ of %@",
+        "Renommer": "Rename",
+        "Renommer…": "Rename…",
+        "Mettre au premier plan": "Bring to Front",
+
+        // Empty states
+        "Ajouter des données à votre rapport": "Add data to your report",
+        "Importez un fichier CSV ou Excel (ou glissez-le ici), puis construisez vos visuels.": "Import a CSV or Excel file (or drop it here), then build your visuals.",
+        "Importer un fichier…": "Import a File…",
+        "Utiliser les données d'exemple": "Use Sample Data",
+        "Créez votre premier visuel": "Create your first visual",
+        "Choisissez un type dans le volet Visualisations, ou cliquez sur un champ du volet Données.": "Pick a type in the Visualizations pane, or click a field in the Data pane.",
+
+        // Data view
+        "Table": "Table",
+        "%@ lignes · %@ colonnes": "%@ rows · %@ columns",
+        "Affichage des %@ premières lignes": "Showing the first %@ rows",
+        "Aucune table": "No tables",
+        "Type de données": "Data type",
+        "Cliquez pour changer le type de données": "Click to change the data type",
+        "Aucune table n'est liée à un fichier source.": "No table is linked to a source file.",
+        "« %@ » : feuille introuvable dans %@.": "“%@”: sheet not found in %@.",
+
+        // Engine & visuals
+        "(Vide)": "(Blank)",
+        "T%@ %@": "Q%@ %@",
+        "Glissez des champs depuis le volet Données": "Drag fields from the Data pane",
+        "Légende": "Legend",
+        "Axe": "Axis",
+        "Ajoutez un champ dans « %@ »": "Add a field to “%@”",
+        "Ajoutez un champ dans « Valeurs »": "Add a field to “Values”",
+        "Ajoutez un champ dans « Champs »": "Add a field to “Fields”",
+        "Ajoutez un champ dans « Champ »": "Add a field to “Field”",
+        "Aucune donnée pour ces filtres": "No data for these filters",
+        "Ajoutez des champs au tableau": "Add fields to the table",
+        "Total": "Total",
+        "… %@ lignes supplémentaires": "… %@ more rows",
+        "Tout sélectionner": "Select all",
+
+        // Import
+        "Le fichier « %@ » ne contient aucune donnée.": "The file “%@” contains no data.",
+        "Le classeur « %@ » ne contient aucune feuille avec des données.": "The workbook “%@” has no sheet with data.",
+        "Le format .xls (Excel 97-2003) n'est pas pris en charge. Enregistrez le fichier au format .xlsx.": "The .xls format (Excel 97-2003) isn't supported. Save the file as .xlsx.",
+        "Format de fichier non pris en charge : .%@": "Unsupported file format: .%@",
+        "Colonne %@": "Column %@",
+        "Impossible de lire l'encodage du fichier « %@ ».": "Couldn't read the encoding of “%@”.",
+        "Le fichier « %@ » n'est pas un classeur Excel valide.": "“%@” isn't a valid Excel workbook.",
+        "Classeur Excel illisible (workbook.xml manquant).": "Unreadable Excel workbook (workbook.xml missing).",
+        "Feuille %@": "Sheet %@",
+
+        // Measure editor
+        "Mesure": "Measure",
+        "Mesure %@": "Measure %@",
+        "Mesure : %@": "Measure: %@",
+        "Modifier la mesure": "Edit measure",
+        "Modifier la mesure…": "Edit Measure…",
+        "Supprimer la mesure": "Delete Measure",
+        "Nom": "Name",
+        "Format": "Format",
+        "Valeur sur toutes les données : ": "Value over all data: ",
+        "Champ ou mesure…": "Field or measure…",
+        "Donnez un nom à la mesure.": "Give the measure a name.",
+        "Le nom ne peut pas contenir de crochets.": "The name can't contain brackets.",
+        "Le nom « %@ » est déjà utilisé par une autre mesure ou une colonne.": "The name “%@” is already used by another measure or a column.",
+        "SUM(Table[Colonne])": "SUM(Table[Column])",
+        "AVERAGE(Table[Colonne])": "AVERAGE(Table[Column])",
+        "MAX(Table[Colonne])": "MAX(Table[Column])",
+        "COUNT(Table[Colonne])": "COUNT(Table[Column])",
+        "DISTINCTCOUNT(Table[Colonne])": "DISTINCTCOUNT(Table[Column])",
+        "CALCULATE([Mesure], Table[Colonne] = \"valeur\")": "CALCULATE([Measure], Table[Column] = \"value\")",
+        "IF(condition, alors, sinon)": "IF(condition, then, else)",
+        "Somme d'une colonne": "Sum of a column",
+        "Moyenne": "Average",
+        "Minimum, maximum (ou de deux valeurs)": "Minimum, maximum (or of two values)",
+        "Nombre de valeurs non vides": "Number of non-blank values",
+        "Nombre de valeurs distinctes": "Number of distinct values",
+        "Nombre de lignes": "Number of rows",
+        "Division sûre (vide si b = 0)": "Safe division (blank if b = 0)",
+        "Change le contexte de filtre": "Changes the filter context",
+        "Dans CALCULATE : ignore les filtres": "In CALCULATE: ignores filters",
+        "Dans CALCULATE : ignore la catégorie, garde les segments": "In CALCULATE: ignores the category, keeps slicers",
+        "Condition": "Condition",
+        "Arrondi": "Rounding",
+        "Syntaxe : Table[Colonne] ou 'Table avec espaces'[Colonne], [Mesure] pour une autre mesure. Les arguments se séparent par « , » ou « ; » et les décimales s'écrivent avec un point.": "Syntax: Table[Column] or 'Table with spaces'[Column], [Measure] for another measure. Separate arguments with “,” or “;” and write decimals with a dot.",
+
+        // Measure language errors
+        "Nombre invalide : %@": "Invalid number: %@",
+        "Guillemet fermant manquant.": "Missing closing quote.",
+        "« %@ » manquant.": "Missing “%@”.",
+        "Opérateur « & » non pris en charge (utilisez &&).": "The “&” operator isn't supported (use &&).",
+        "Opérateur « | » non pris en charge (utilisez ||).": "The “|” operator isn't supported (use ||).",
+        "Caractère inattendu : « %@ »": "Unexpected character: “%@”",
+        "L'expression est vide.": "The expression is empty.",
+        "Élément inattendu après la fin de l'expression.": "Unexpected item after the end of the expression.",
+        "Parenthèse fermante manquante.": "Missing closing parenthesis.",
+        "Parenthèse fermante manquante après les arguments de %@.": "Missing closing parenthesis after the arguments of %@.",
+        "L'expression est incomplète.": "The expression is incomplete.",
+        "Élément inattendu dans l'expression.": "Unexpected item in the expression.",
+        "Table introuvable : %@": "Table not found: %@",
+        "Colonne ou mesure introuvable : %@[%@]": "Column or measure not found: %@[%@]",
+        "Colonne ou mesure introuvable : [%@]": "Column or measure not found: [%@]",
+        "Référence circulaire vers la mesure [%@].": "Circular reference to the measure [%@].",
+        "Fonction inconnue : %@": "Unknown function: %@",
+        "%@ attend %@ argument(s).": "%@ expects %@ argument(s).",
+        "%@ à %@": "%@ to %@",
+        "%@ attend une colonne, par exemple %@(Table[Colonne]).": "%@ expects a column, for example %@(Table[Column]).",
+        "%@ attend une colonne, pas une mesure ([%@]).": "%@ expects a column, not a measure ([%@]).",
+        "Colonne introuvable : %@[%@]": "Column not found: %@[%@]",
+        "COUNTROWS attend une table, par exemple COUNTROWS(Ventes).": "COUNTROWS expects a table, for example COUNTROWS(Sales).",
+        "%@ ne peut être utilisé que comme filtre de CALCULATE.": "%@ can only be used as a CALCULATE filter.",
+        "%@ attend une table ou une colonne.": "%@ expects a table or a column.",
+        "Le filtre de CALCULATE doit porter sur une colonne.": "A CALCULATE filter must apply to a column.",
+        "Filtre de CALCULATE non pris en charge. Utilisez Table[Colonne] = valeur, ALL(…), ALLSELECTED(…) ou REMOVEFILTERS(…).": "Unsupported CALCULATE filter. Use Table[Column] = value, ALL(…), ALLSELECTED(…) or REMOVEFILTERS(…).",
+        "Filtre de CALCULATE non pris en charge.": "Unsupported CALCULATE filter.",
+        "Imbrication trop profonde.": "Nesting is too deep.",
+        "Une table ne peut pas être utilisée comme valeur.": "A table can't be used as a value.",
+        "Une colonne doit être agrégée (SUM, AVERAGE…).": "A column must be aggregated (SUM, AVERAGE…).",
+        "Référence introuvable : [%@]": "Reference not found: [%@]",
+        "Colonne attendue.": "Column expected.",
+        "Aucune relation ne relie %@ à la table du visuel.": "No relationship links %@ to the visual's table.",
+        "COUNTROWS : table hors de portée du visuel.": "COUNTROWS: table out of the visual's reach.",
+        "Fonction non prise en charge ici : %@": "Function not supported here: %@",
+
+        // Model view & relationships
+        "+ %@ autres colonnes": "+ %@ more columns",
+        "Glissez cette colonne sur une colonne d'une autre table pour créer une relation": "Drag this column onto a column of another table to create a relationship",
+        "Relations": "Relationships",
+        "Aucune relation. Glissez une colonne sur une colonne d'une autre table, ou utilisez le formulaire ci-dessous.": "No relationships. Drag a column onto a column of another table, or use the form below.",
+        "Aucune nouvelle relation détectée.": "No new relationship detected.",
+        "1 relation créée.": "1 relationship created.",
+        "%@ relations créées.": "%@ relationships created.",
+        "Détecter automatiquement": "Autodetect",
+        "Supprimer la relation": "Delete the relationship",
+        "Active": "Active",
+        "Nouvelle relation": "New relationship",
+        "Table liée": "Related table",
+        "Créer la relation": "Create Relationship",
+        "Le sens « plusieurs → un » est déterminé automatiquement d'après les valeurs uniques. Les filtres se propagent du côté « 1 » vers le côté « * ».": "The “many → one” direction is determined automatically from unique values. Filters flow from the “1” side to the “*” side.",
+        "Colonne": "Column",
+        "Colonne introuvable.": "Column not found.",
+        "Les deux colonnes doivent appartenir à des tables différentes.": "The two columns must belong to different tables.",
+        "Aucune des deux colonnes (« %@ », « %@ ») ne contient de valeurs uniques : les relations plusieurs-à-plusieurs ne sont pas prises en charge.": "Neither column (“%@”, “%@”) contains unique values: many-to-many relationships aren't supported.",
+        "Cette relation existe déjà.": "This relationship already exists.",
+        "Relation créée mais inactive : ces tables sont déjà reliées par un autre chemin.": "Relationship created but inactive: these tables are already linked by another path.",
+        "Impossible d'activer cette relation : les tables sont déjà reliées par un autre chemin actif. Désactivez-le d'abord.": "Can't activate this relationship: the tables are already linked by another active path. Deactivate it first.",
+
+        // Model enums
+        "Nombre": "Number",
+        "Texte": "Text",
+        "Date": "Date",
+        "Année": "Year",
+        "Trimestre": "Quarter",
+        "Mois": "Month",
+        "Jour": "Day",
+        "Somme": "Sum",
+        "Minimum": "Minimum",
+        "Maximum": "Maximum",
+        "Nombre (distinct)": "Count (distinct)",
+        "Nombre distinct de %@": "Distinct count of %@",
+        "%@ de %@": "%@ of %@",
+        "Histogramme": "Column chart",
+        "Graphique à barres": "Bar chart",
+        "Courbe": "Line chart",
+        "Aires": "Area chart",
+        "Secteurs": "Pie chart",
+        "Anneau": "Donut chart",
+        "Carte": "Card",
+        "Tableau": "Table",
+        "Segment": "Slicer",
+        " par %@": " by %@",
+        " et %@": " and %@",
+        "Automatique": "Automatic",
+        "Nombre entier": "Whole number",
+        "Décimal (2)": "Decimal (2)",
+        "Pourcentage": "Percentage",
+        "Monétaire (€)": "Currency (€)",
+
+        // Panes
+        "Visualisations": "Visualizations",
+        "Sélectionnez un visuel sur la page pour modifier ses champs, ou cliquez sur un type ci-dessus pour en créer un.": "Select a visual on the page to edit its fields, or click a type above to create one.",
+        "Ajouter : %@": "Add: %@",
+        "Convertir en : %@": "Convert to: %@",
+        "Valeurs": "Values",
+        "Champs": "Fields",
+        "Regrouper par": "Group by",
+        "Champ": "Field",
+        "Ajouter des champs ici": "Add fields here",
+        "Remplacer le champ": "Replace the field",
+        "Ajouter un champ ici": "Add a field here",
+        "Aucune option": "No options",
+        "Champ introuvable": "Field not found",
+        "Aucune relation ne relie ce champ aux autres champs du visuel : il est ignoré. Créez une relation dans la vue Modèle.": "No relationship links this field to the visual's other fields, so it is ignored. Create a relationship in the Model view.",
+        "Mise en forme": "Format",
+        "Afficher le titre": "Show title",
+        "Taille : %@ × %@  ·  Position : %@, %@": "Size: %@ × %@  ·  Position: %@, %@",
+        "Rechercher": "Search",
+        "Aucune donnée chargée": "No data loaded",
+        "Données d'exemple": "Sample data",
+        "Renommer la table": "Rename Table",
+        "Afficher les données": "Show Data",
+        "Supprimer la table": "Delete Table",
+        "Cliquez pour ajouter au visuel sélectionné, ou glissez vers un emplacement de champ": "Click to add to the selected visual, or drag to a field well",
+        "Masquer le volet Filtres": "Hide the Filters pane",
+        "Filtre croisé": "Cross-filter",
+        "Appliqués à ce visuel": "Applied to this visual",
+        "Filtres sur cette page": "Filters on this page",
+        "Ajouter des champs de données ici": "Add data fields here",
+        "Effacer le filtre": "Clear the filter",
+        "Supprimer le filtre": "Remove the filter",
+        "est (Tout)": "is (All)",
+        "est ": "is ",
+
+        // Power BI
+        "Connexion annulée.": "Sign-in cancelled.",
+        "Impossible d'ouvrir la fenêtre de connexion.": "Couldn't open the sign-in window.",
+        "Réponse de connexion invalide.": "Invalid sign-in response.",
+        "Échec de l'obtention du jeton Microsoft.": "Couldn't get a Microsoft token.",
+        "Connectez-vous à Power BI.": "Sign in to Power BI.",
+        "Session expirée, reconnectez-vous. (%@)": "Session expired, please sign in again. (%@)",
+        "Accès refusé par Power BI (401). Vérifiez votre licence Pro/PPU et les autorisations de l'application.": "Access denied by Power BI (401). Check your Pro/PPU license and the app's permissions.",
+        "Accès interdit (403) : vous n'avez pas les droits sur cet élément.": "Forbidden (403): you don't have access to this item.",
+        "Élément introuvable (404).": "Item not found (404).",
+        "Erreur Power BI (%@).": "Power BI error (%@).",
+        "Collez un lien app.powerbi.com.": "Paste an app.powerbi.com link.",
+        "Ce lien ne désigne pas un rapport.": "This link doesn't point to a report.",
+        "Réglages Power BI": "Power BI Settings",
+        "Pour accéder à vos rapports, Prisme a besoin de l'identifiant d'une application enregistrée dans Microsoft Entra ID.": "To access your reports, Prisme needs the ID of an app registered in Microsoft Entra ID.",
+        "Configurer…": "Set Up…",
+        "Se connecter avec Microsoft": "Sign in with Microsoft",
+        "Connecté": "Signed in",
+        "Actualiser la liste": "Refresh List",
+        "Se déconnecter": "Sign Out",
+        "Coller un lien de rapport…": "Paste a report link…",
+        "Rechercher un rapport": "Search reports",
+        "Mon espace et partagés avec moi": "My workspace and shared with me",
+        "Aucun rapport": "No reports",
+        "Espaces de travail": "Workspaces",
+        "Applications": "Apps",
+        "Les liens « Publier sur le web » s'ouvrent sans connexion.": "“Publish to web” links open without signing in.",
+        "Rapports Power BI": "Power BI reports",
+        "Choisissez un rapport dans la liste, ou collez un lien copié depuis app.powerbi.com.": "Choose a report in the list, or paste a link copied from app.powerbi.com.",
+        "Enregistrez une application dans Microsoft Entra ID (type « Client public / natif », URI de redirection « %@ », autorisations déléguées Power BI Service : Report.Read.All, Workspace.Read.All, App.Read.All, Dataset.Read.All), puis collez ici son identifiant. La procédure détaillée est dans le README.": "Register an app in Microsoft Entra ID (“Public client/native” platform, redirect URI “%@”, Power BI Service delegated permissions: Report.Read.All, Workspace.Read.All, App.Read.All, Dataset.Read.All), then paste its ID here. The README has step-by-step instructions.",
+        "ID d'application (client)": "Application (client) ID",
+        "Locataire (tenant)": "Tenant",
+        "Locataire : laissez « organizations » ou indiquez l'ID de répertoire (tenant ID) ou le domaine de votre organisation.": "Tenant: keep “organizations” or enter your organization's directory (tenant) ID or domain.",
+        "L'identifiant doit être un GUID.": "The ID must be a GUID.",
+        "Terminé": "Done",
+        "Erreur inconnue": "Unknown error",
+        "Rapport : %@": "Report: %@",
+
+        // Sample data
+        "Ventes": "Sales",
+        "Produits": "Products",
+        "Régions": "Regions",
+
+        // Settings
+        "Langue": "Language",
+        "Langue de l'interface": "Interface language",
+        "Réglages": "Settings",
+    ]
+}

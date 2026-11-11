@@ -7,31 +7,31 @@ struct MeasureEditor: View {
     @State var draft: MeasureDraft
     @State private var error: String?
 
-    private static let snippets: [(String, String, String)] = [
-        ("SUM", "SUM(Table[Colonne])", "Somme d'une colonne"),
-        ("AVERAGE", "AVERAGE(Table[Colonne])", "Moyenne"),
-        ("MIN / MAX", "MAX(Table[Colonne])", "Minimum, maximum (ou de deux valeurs)"),
-        ("COUNT", "COUNT(Table[Colonne])", "Nombre de valeurs non vides"),
-        ("DISTINCTCOUNT", "DISTINCTCOUNT(Table[Colonne])", "Nombre de valeurs distinctes"),
-        ("COUNTROWS", "COUNTROWS(Table)", "Nombre de lignes"),
-        ("DIVIDE", "DIVIDE(a, b)", "Division sûre (vide si b = 0)"),
-        ("CALCULATE", "CALCULATE([Mesure], Table[Colonne] = \"valeur\")", "Change le contexte de filtre"),
-        ("ALL", "ALL(Table)", "Dans CALCULATE : ignore les filtres"),
-        ("ALLSELECTED", "ALLSELECTED(Table)", "Dans CALCULATE : ignore la catégorie, garde les segments"),
-        ("IF", "IF(condition, alors, sinon)", "Condition"),
-        ("ROUND", "ROUND(x, 2)", "Arrondi"),
-    ]
+    private static var snippets: [(String, String, String)] { [
+        ("SUM", L("SUM(Table[Colonne])"), L("Somme d'une colonne")),
+        ("AVERAGE", L("AVERAGE(Table[Colonne])"), L("Moyenne")),
+        ("MIN / MAX", L("MAX(Table[Colonne])"), L("Minimum, maximum (ou de deux valeurs)")),
+        ("COUNT", L("COUNT(Table[Colonne])"), L("Nombre de valeurs non vides")),
+        ("DISTINCTCOUNT", L("DISTINCTCOUNT(Table[Colonne])"), L("Nombre de valeurs distinctes")),
+        ("COUNTROWS", "COUNTROWS(Table)", L("Nombre de lignes")),
+        ("DIVIDE", "DIVIDE(a, b)", L("Division sûre (vide si b = 0)")),
+        ("CALCULATE", L("CALCULATE([Mesure], Table[Colonne] = \"valeur\")"), L("Change le contexte de filtre")),
+        ("ALL", "ALL(Table)", L("Dans CALCULATE : ignore les filtres")),
+        ("ALLSELECTED", "ALLSELECTED(Table)", L("Dans CALCULATE : ignore la catégorie, garde les segments")),
+        ("IF", L("IF(condition, alors, sinon)"), L("Condition")),
+        ("ROUND", "ROUND(x, 2)", L("Arrondi")),
+    ] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(draft.id == nil ? "Nouvelle mesure" : "Modifier la mesure").font(.title3.weight(.semibold))
+            Text(draft.id == nil ? L("Nouvelle mesure") : L("Modifier la mesure")).font(.title3.weight(.semibold))
             HStack(spacing: 12) {
-                TextField("Nom", text: $draft.name).textFieldStyle(.roundedBorder).frame(width: 220)
-                Picker("Table", selection: $draft.table) {
+                TextField(L("Nom"), text: $draft.name).textFieldStyle(.roundedBorder).frame(width: 220)
+                Picker(L("Table"), selection: $draft.table) {
                     ForEach(state.tables) { Text($0.name).tag($0.name) }
                 }
                 .frame(width: 200)
-                Picker("Format", selection: $draft.format) {
+                Picker(L("Format"), selection: $draft.format) {
                     ForEach(MeasureFormat.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 .frame(width: 210)
@@ -50,7 +50,7 @@ struct MeasureEditor: View {
                             Text(preview.dropFirst(2)).foregroundStyle(.secondary)
                         } else if !draft.expression.isEmpty {
                             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                            Text("Valeur sur toutes les données : ").foregroundStyle(.secondary)
+                            Text(L("Valeur sur toutes les données : ")).foregroundStyle(.secondary)
                             Text(preview).fontWeight(.semibold)
                         }
                     }
@@ -61,7 +61,7 @@ struct MeasureEditor: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Insérer").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    Text(L("Insérer")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             fieldsMenu
@@ -81,15 +81,15 @@ struct MeasureEditor: View {
                 }
                 .frame(width: 230, height: 220)
             }
-            Text("Syntaxe : Table[Colonne] ou 'Table avec espaces'[Colonne], [Mesure] pour une autre mesure. Les arguments se séparent par « , » ou « ; » et les décimales s'écrivent avec un point.")
+            Text(L("Syntaxe : Table[Colonne] ou 'Table avec espaces'[Colonne], [Mesure] pour une autre mesure. Les arguments se séparent par « , » ou « ; » et les décimales s'écrivent avec un point."))
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
             HStack {
                 if let id = draft.id, let m = state.measures.first(where: { $0.id == id }) {
-                    Button("Supprimer", role: .destructive) { state.deleteMeasure(m); dismiss() }
+                    Button(L("Supprimer"), role: .destructive) { state.deleteMeasure(m); dismiss() }
                 }
                 Spacer()
-                Button("Annuler", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Enregistrer") {
+                Button(L("Annuler"), role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(L("Enregistrer")) {
                     if let e = state.saveMeasure(draft) { error = e } else { dismiss() }
                 }
                 .keyboardShortcut("s", modifiers: .command)
@@ -101,7 +101,7 @@ struct MeasureEditor: View {
     }
 
     private var fieldsMenu: some View {
-        Menu("Champ ou mesure…") {
+        Menu(L("Champ ou mesure…")) {
             ForEach(state.tables) { t in
                 Menu(t.name) {
                     ForEach(t.columns) { c in

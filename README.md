@@ -1,7 +1,8 @@
 # Prisme
 
 A native macOS business-intelligence app (SwiftUI + Swift Charts), inspired by Power BI Desktop:
-import data, then build interactive reports with drag and drop. The user interface is in French.
+import data, then build interactive reports with drag and drop. The interface is available in French and English
+(**Prisme → Settings…** / ⌘, — follows the system language by default; the sample dataset follows it too).
 
 ## Features (v0.1)
 
@@ -102,6 +103,7 @@ renewed automatically.
 | `PowerBIAuth.swift` | Microsoft Entra sign-in (PKCE) and Keychain storage |
 | `PowerBIService.swift` | Power BI REST API client and state |
 | `PowerBIView.swift` | Power BI view, settings and embedded report |
+| `Localization.swift` | `L()` translation helper, language setting and English strings |
 | `SampleData.swift` | Sample dataset (Ventes, Produits, Régions) |
 
 ## License

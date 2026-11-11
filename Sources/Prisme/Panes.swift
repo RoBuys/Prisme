@@ -40,7 +40,7 @@ struct VisualizationsPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: "Visualisations")
+            PaneHeader(title: L("Visualisations"))
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     typeGrid
@@ -50,7 +50,7 @@ struct VisualizationsPane: View {
                         Divider()
                         formatSection(v)
                     } else {
-                        Text("Sélectionnez un visuel sur la page pour modifier ses champs, ou cliquez sur un type ci-dessus pour en créer un.")
+                        Text(L("Sélectionnez un visuel sur la page pour modifier ses champs, ou cliquez sur un type ci-dessus pour en créer un."))
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
@@ -77,7 +77,7 @@ struct VisualizationsPane: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(state.selectedVisual == nil ? "Ajouter : \(t.label)" : "Convertir en : \(t.label)")
+                .help(state.selectedVisual == nil ? L("Ajouter : %@", t.label) : L("Convertir en : %@", t.label))
             }
         }
     }
@@ -86,19 +86,19 @@ struct VisualizationsPane: View {
     private func wells(_ v: Visual) -> some View {
         switch v.type {
         case .column, .bar, .line, .area:
-            axisWell("Axe", v, multi: false)
+            axisWell(L("Axe"), v, multi: false)
             legendWell(v)
-            valuesWell("Valeurs", v, multi: true)
+            valuesWell(L("Valeurs"), v, multi: true)
         case .pie, .donut:
-            axisWell("Légende", v, multi: false)
-            valuesWell("Valeurs", v, multi: false)
+            axisWell(L("Légende"), v, multi: false)
+            valuesWell(L("Valeurs"), v, multi: false)
         case .card:
-            valuesWell("Champs", v, multi: false)
+            valuesWell(L("Champs"), v, multi: false)
         case .table:
-            axisWell("Regrouper par", v, multi: true)
-            valuesWell("Valeurs", v, multi: true)
+            axisWell(L("Regrouper par"), v, multi: true)
+            valuesWell(L("Valeurs"), v, multi: true)
         case .slicer:
-            axisWell("Champ", v, multi: false)
+            axisWell(L("Champ"), v, multi: false)
         }
     }
 
@@ -121,15 +121,15 @@ struct VisualizationsPane: View {
                 }
             }
             if multi || items.isEmpty {
-                FieldDropZone(placeholder: "Ajouter des champs ici") { state.addField($0, to: .axis, visualID: v.id) }
+                FieldDropZone(placeholder: L("Ajouter des champs ici")) { state.addField($0, to: .axis, visualID: v.id) }
             } else {
-                FieldDropZone(placeholder: "Remplacer le champ") { state.addField($0, to: .axis, visualID: v.id) }
+                FieldDropZone(placeholder: L("Remplacer le champ")) { state.addField($0, to: .axis, visualID: v.id) }
             }
         }
     }
 
     private func legendWell(_ v: Visual) -> some View {
-        wellSection("Légende") {
+        wellSection(L("Légende")) {
             if let l = v.legend {
                 FieldChip(name: l.displayName, warning: warning(l, v)) {
                     dateLevelMenu(l) { level in state.mutateVisual(v.id) { $0.legend?.dateLevel = level } }
@@ -137,7 +137,7 @@ struct VisualizationsPane: View {
                     state.mutateVisual(v.id) { $0.legend = nil }
                 }
             }
-            FieldDropZone(placeholder: v.legend == nil ? "Ajouter un champ ici" : "Remplacer le champ") {
+            FieldDropZone(placeholder: v.legend == nil ? L("Ajouter un champ ici") : L("Remplacer le champ")) {
                 state.addField($0, to: .legend, visualID: v.id)
             }
         }
@@ -150,7 +150,7 @@ struct VisualizationsPane: View {
                 FieldChip(name: vf.displayName, warning: warning(vf.field, v), isMeasure: vf.measure) {
                     let isNumber = state.column(for: vf.field)?.type == .number
                     if vf.measure, let m = state.measure(for: vf.field) {
-                        Button("Modifier la mesure…") { state.editMeasure(m) }
+                        Button(L("Modifier la mesure…")) { state.editMeasure(m) }
                     }
                     ForEach(vf.measure ? [] : Aggregation.allCases.filter { isNumber || !$0.isNumericOnly }, id: \.self) { a in
                         Button {
@@ -166,9 +166,9 @@ struct VisualizationsPane: View {
                 }
             }
             if multi || items.isEmpty {
-                FieldDropZone(placeholder: "Ajouter des champs ici") { state.addField($0, to: .values, visualID: v.id) }
+                FieldDropZone(placeholder: L("Ajouter des champs ici")) { state.addField($0, to: .values, visualID: v.id) }
             } else {
-                FieldDropZone(placeholder: "Remplacer le champ") { state.addField($0, to: .values, visualID: v.id) }
+                FieldDropZone(placeholder: L("Remplacer le champ")) { state.addField($0, to: .values, visualID: v.id) }
             }
         }
     }
@@ -182,24 +182,24 @@ struct VisualizationsPane: View {
                 }
             }
         } else {
-            Text("Aucune option").foregroundStyle(.secondary)
+            Text(L("Aucune option")).foregroundStyle(.secondary)
         }
     }
 
     private func warning(_ f: FieldRef, _ v: Visual) -> String? {
         if let m = state.measure(for: f) {
             if let err = MeasureCompiler.validate(m.expression, home: m.table, name: m.name, state.model) { return err }
-        } else if state.column(for: f) == nil { return "Champ introuvable" }
+        } else if state.column(for: f) == nil { return L("Champ introuvable") }
         if Engine.unreachableFields(v, state.model).contains(f.columnKey) {
-            return "Aucune relation ne relie ce champ aux autres champs du visuel : il est ignoré. Créez une relation dans la vue Modèle."
+            return L("Aucune relation ne relie ce champ aux autres champs du visuel : il est ignoré. Créez une relation dans la vue Modèle.")
         }
         return nil
     }
 
     private func formatSection(_ v: Visual) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Mise en forme").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            Toggle("Afficher le titre", isOn: Binding(
+            Text(L("Mise en forme")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            Toggle(L("Afficher le titre"), isOn: Binding(
                 get: { v.showTitle },
                 set: { val in state.mutateVisual(v.id) { $0.showTitle = val } }))
                 .toggleStyle(.switch)
@@ -209,7 +209,7 @@ struct VisualizationsPane: View {
                 set: { val in state.mutateVisual(v.id) { $0.title = val } }))
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11))
-            Text("Taille : \(Int(v.frame.width)) × \(Int(v.frame.height))  ·  Position : \(Int(v.frame.minX)), \(Int(v.frame.minY))")
+            Text(L("Taille : %@ × %@  ·  Position : %@, %@", Int(v.frame.width), Int(v.frame.height), Int(v.frame.minX), Int(v.frame.minY)))
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
         }
@@ -262,10 +262,10 @@ struct FieldsPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: "Données")
+            PaneHeader(title: L("Données"))
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 11))
-                TextField("Rechercher", text: $search).textFieldStyle(.plain).font(.system(size: 12))
+                TextField(L("Rechercher"), text: $search).textFieldStyle(.plain).font(.system(size: 12))
             }
             .padding(6)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.05)))
@@ -274,9 +274,9 @@ struct FieldsPane: View {
 
             if state.tables.isEmpty {
                 VStack(spacing: 10) {
-                    Text("Aucune donnée chargée").font(.system(size: 12)).foregroundStyle(.secondary)
-                    Button("Obtenir des données…") { state.importWithPanel() }
-                    Button("Données d'exemple") { state.loadSample() }.buttonStyle(.link)
+                    Text(L("Aucune donnée chargée")).font(.system(size: 12)).foregroundStyle(.secondary)
+                    Button(L("Obtenir des données…")) { state.importWithPanel() }
+                    Button(L("Données d'exemple")) { state.loadSample() }.buttonStyle(.link)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -289,10 +289,10 @@ struct FieldsPane: View {
             }
         }
         .background(.background)
-        .alert("Renommer la table", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("Nom", text: $draft)
-            Button("Renommer") { if let old = renaming { state.renameTable(old, to: draft) }; renaming = nil }
-            Button("Annuler", role: .cancel) { renaming = nil }
+        .alert(L("Renommer la table"), isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField(L("Nom"), text: $draft)
+            Button(L("Renommer")) { if let old = renaming { state.renameTable(old, to: draft) }; renaming = nil }
+            Button(L("Annuler"), role: .cancel) { renaming = nil }
         }
     }
 
@@ -315,12 +315,12 @@ struct FieldsPane: View {
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { state.dataTableName = t.name; state.mode = .data }
             .contextMenu {
-                Button("Afficher les données") { state.dataTableName = t.name; state.mode = .data }
-                Button("Nouvelle mesure…") { state.newMeasure(in: t.name) }
-                Button("Renommer…") { draft = t.name; renaming = t.name }
-                if t.source != nil { Button("Actualiser") { state.refreshAll() } }
+                Button(L("Afficher les données")) { state.dataTableName = t.name; state.mode = .data }
+                Button(L("Nouvelle mesure…")) { state.newMeasure(in: t.name) }
+                Button(L("Renommer…")) { draft = t.name; renaming = t.name }
+                if t.source != nil { Button(L("Actualiser")) { state.refreshAll() } }
                 Divider()
-                Button("Supprimer la table", role: .destructive) { state.deleteTable(t.name) }
+                Button(L("Supprimer la table"), role: .destructive) { state.deleteTable(t.name) }
             }
         }
     }
@@ -346,10 +346,10 @@ struct FieldsPane: View {
                 .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent.opacity(0.2)))
         }
         .contextMenu {
-            Button("Modifier la mesure…") { state.editMeasure(m) }
-            Button("Supprimer la mesure", role: .destructive) { state.deleteMeasure(m) }
+            Button(L("Modifier la mesure…")) { state.editMeasure(m) }
+            Button(L("Supprimer la mesure"), role: .destructive) { state.deleteMeasure(m) }
         }
-        .help("Mesure : \(m.expression)")
+        .help(L("Mesure : %@", m.expression))
     }
 
     private func fieldRow(_ t: DataTable, _ c: DataColumn) -> some View {
@@ -374,7 +374,7 @@ struct FieldsPane: View {
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent.opacity(0.2)))
         }
-        .help("Cliquez pour ajouter au visuel sélectionné, ou glissez vers un emplacement de champ")
+        .help(L("Cliquez pour ajouter au visuel sélectionné, ou glissez vers un emplacement de champ"))
     }
 }
 
@@ -386,17 +386,17 @@ struct FiltersPane: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                PaneHeader(title: "Filtres")
+                PaneHeader(title: L("Filtres"))
                 Button { state.showFilters = false } label: { Image(systemName: "chevron.right") }
                     .buttonStyle(.plain).foregroundStyle(.secondary).padding(.trailing, 12)
-                    .help("Masquer le volet Filtres")
+                    .help(L("Masquer le volet Filtres"))
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     if let cf = state.crossFilter, cf.pageID == state.currentPageID {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Filtre croisé").font(.system(size: 11, weight: .semibold))
+                                Text(L("Filtre croisé")).font(.system(size: 11, weight: .semibold))
                                 Text("\(cf.field.displayName) = \(cf.label)").font(.system(size: 11)).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -409,14 +409,14 @@ struct FiltersPane: View {
                     if let v = state.selectedVisual {
                         let fs = visualFilterSummary(v)
                         if !fs.isEmpty {
-                            Text("Appliqués à ce visuel").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                            Text(L("Appliqués à ce visuel")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                             ForEach(fs, id: \.self) { Text($0).font(.system(size: 11)).foregroundStyle(.secondary) }
                             Divider()
                         }
                     }
-                    Text("Filtres sur cette page").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    Text(L("Filtres sur cette page")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                     ForEach(state.currentPage.filters) { f in FilterCard(filter: f) }
-                    FieldDropZone(placeholder: "Ajouter des champs de données ici") { state.addPageFilter($0) }
+                    FieldDropZone(placeholder: L("Ajouter des champs de données ici")) { state.addPageFilter($0) }
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
@@ -466,15 +466,15 @@ struct FilterCard: View {
                     Button { state.mutateFilter(filter.id) { $0.selected = [] } } label: {
                         Image(systemName: "eraser")
                     }
-                    .buttonStyle(.plain).help("Effacer le filtre")
+                    .buttonStyle(.plain).help(L("Effacer le filtre"))
                 }
                 Button { state.removePageFilter(filter.id) } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).help("Supprimer le filtre")
+                    .buttonStyle(.plain).help(L("Supprimer le filtre"))
             }
             if expanded {
                 let all = Engine.distinctValues(filter.field, state.tables)
                 if all.count > 8 {
-                    TextField("Rechercher", text: $search).textFieldStyle(.roundedBorder).font(.system(size: 11))
+                    TextField(L("Rechercher"), text: $search).textFieldStyle(.roundedBorder).font(.system(size: 11))
                 }
                 let values = search.isEmpty ? all : all.filter { $0.localizedCaseInsensitiveContains(search) }
                 ScrollView {
@@ -505,8 +505,8 @@ struct FilterCard: View {
     }
 
     private var summary: String {
-        if filter.selected.isEmpty { return "est (Tout)" }
+        if filter.selected.isEmpty { return L("est (Tout)") }
         let s = filter.selected.sorted()
-        return "est " + s.prefix(2).joined(separator: ", ") + (s.count > 2 ? " +\(s.count - 2)" : "")
+        return L("est ") + s.prefix(2).joined(separator: ", ") + (s.count > 2 ? " +\(s.count - 2)" : "")
     }
 }

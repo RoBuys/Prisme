@@ -9,8 +9,11 @@ enum Fmt {
         return c
     }()
 
-    static let monthNames = ["janv.", "févr.", "mars", "avr.", "mai", "juin",
-                             "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+    static var monthNames: [String] {
+        Loc.isEnglish
+            ? ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            : ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+    }
 
     static func day(_ d: Date) -> String {
         let c = calendar.dateComponents([.year, .month, .day], from: d)
@@ -72,7 +75,7 @@ struct GroupKey: Hashable, Comparable {
         }
     }
 
-    static let blankLabel = "(Vide)"
+    static var blankLabel: String { L("(Vide)") }
 
     static func of(_ v: CellValue, _ level: DateLevel?) -> GroupKey {
         switch v {
@@ -86,7 +89,7 @@ struct GroupKey: Hashable, Comparable {
             case .year: return GroupKey(label: String(y), sort: Double(y))
             case .quarter:
                 let q = (m - 1) / 3 + 1
-                return GroupKey(label: "T\(q) \(y)", sort: Double(y * 10 + q))
+                return GroupKey(label: L("T%@ %@", q, y), sort: Double(y * 10 + q))
             case .month: return GroupKey(label: "\(Fmt.monthNames[m - 1]) \(y)", sort: Double(y * 100 + m))
             case .day, nil: return GroupKey(label: Fmt.day(d), sort: d.timeIntervalSince1970)
             }
@@ -391,15 +394,15 @@ enum Engine {
 
     static func chartData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec]) -> ChartData {
         guard let ctx = context(for: queryFields(v, m), m) else {
-            return ChartData(message: "Glissez des champs depuis le volet Données")
+            return ChartData(message: L("Glissez des champs depuis le volet Données"))
         }
         let evaluator = MeasureEvaluator(ctx: ctx, model: m)
-        let axisLabel = v.type.isPie ? "Légende" : "Axe"
+        let axisLabel = v.type.isPie ? L("Légende") : L("Axe")
         guard let ax = v.axis.first, let axisValue = ctx.accessor(ax) else {
-            return ChartData(message: "Ajoutez un champ dans « \(axisLabel) »")
+            return ChartData(message: L("Ajoutez un champ dans « %@ »", axisLabel))
         }
         var vals = v.values.compactMap { vf in valueFunction(vf, ctx, evaluator).map { (vf, $0) } }
-        guard !vals.isEmpty else { return ChartData(message: "Ajoutez un champ dans « Valeurs »") }
+        guard !vals.isEmpty else { return ChartData(message: L("Ajoutez un champ dans « Valeurs »")) }
 
         var legendField: FieldRef?
         var legendValue: ((Int) -> CellValue)?
@@ -416,7 +419,7 @@ enum Engine {
             let k = Key(cat: GroupKey.of(axisValue(r), ax.dateLevel), ser: legendValue.map { GroupKey.of($0(r), legendField?.dateLevel) })
             groups[k, default: []].append(r)
         }
-        guard !groups.isEmpty else { return ChartData(message: "Aucune donnée pour ces filtres") }
+        guard !groups.isEmpty else { return ChartData(message: L("Aucune donnée pour ces filtres")) }
 
         var results: [Key: [Double?]] = [:]
         for (k, rows) in groups {
@@ -454,7 +457,7 @@ enum Engine {
         }
         data.categories = cats.map(\.label).filter { c in data.points.contains { $0.category == c } }
         data.series = seriesKeys.map(\.label)
-        if data.points.isEmpty { data.message = "Aucune donnée pour ces filtres" }
+        if data.points.isEmpty { data.message = L("Aucune donnée pour ces filtres") }
         return data
     }
 
@@ -466,19 +469,19 @@ enum Engine {
         guard let ctx = context(for: fields.isEmpty ? [vf.field] : fields, m) else { return nil }
         guard let fn = valueFunction(vf, ctx, MeasureEvaluator(ctx: ctx, model: m)) else { return nil }
         let value = fn(ctx.rowIndices(filters), filters)
-        return (value.map { format($0, vf, m, compact: true) } ?? "(Vide)", vf.displayName)
+        return (value.map { format($0, vf, m, compact: true) } ?? L("(Vide)"), vf.displayName)
     }
 
     // MARK: Table
 
     static func tableData(_ v: Visual, _ m: DataModel, _ filters: [FilterSpec], limit: Int = 1000) -> TableData {
         guard let ctx = context(for: queryFields(v, m), m) else {
-            return TableData(message: "Glissez des champs depuis le volet Données")
+            return TableData(message: L("Glissez des champs depuis le volet Données"))
         }
         let evaluator = MeasureEvaluator(ctx: ctx, model: m)
         let axes = v.axis.compactMap { f in ctx.accessor(f).map { (f, $0) } }
         let vals = v.values.compactMap { vf in valueFunction(vf, ctx, evaluator).map { (vf, $0) } }
-        guard !axes.isEmpty || !vals.isEmpty else { return TableData(message: "Ajoutez des champs au tableau") }
+        guard !axes.isEmpty || !vals.isEmpty else { return TableData(message: L("Ajoutez des champs au tableau")) }
 
         let all = ctx.rowIndices(filters)
         var groups: [[GroupKey]: [Int]] = [:]
@@ -499,10 +502,10 @@ enum Engine {
             data.rowKeys.append(k.first?.label ?? "")
         }
         if !axes.isEmpty && !vals.isEmpty {
-            data.totals = ["Total"] + Array(repeating: "", count: axes.count - 1)
+            data.totals = [L("Total")] + Array(repeating: "", count: axes.count - 1)
                 + vals.map { format($0.1(all, filters), $0.0, m) }
         }
-        if keys.isEmpty { data.message = "Aucune donnée pour ces filtres" }
+        if keys.isEmpty { data.message = L("Aucune donnée pour ces filtres") }
         return data
     }
 

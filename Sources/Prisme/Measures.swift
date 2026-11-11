@@ -45,7 +45,7 @@ private func tokenize(_ source: String) throws -> [Token] {
         if c.isNumber || (c == "." && peek(1)?.isNumber == true) {
             var s = ""
             while let d = peek(), d.isNumber || d == "." { s.append(d); i += 1 }
-            guard let v = Double(s) else { throw MeasureError(message: "Nombre invalide : \(s)") }
+            guard let v = Double(s) else { throw MeasureError(message: L("Nombre invalide : %@", s)) }
             tokens.append(.number(v))
             continue
         }
@@ -53,7 +53,7 @@ private func tokenize(_ source: String) throws -> [Token] {
             var s = ""
             i += 1
             while true {
-                guard let d = peek() else { throw MeasureError(message: "Guillemet fermant manquant.") }
+                guard let d = peek() else { throw MeasureError(message: L("Guillemet fermant manquant.")) }
                 i += 1
                 if d == "\"" {
                     if peek() == "\"" { s.append("\""); i += 1 } else { break }
@@ -67,7 +67,7 @@ private func tokenize(_ source: String) throws -> [Token] {
             var s = ""
             i += 1
             while true {
-                guard let d = peek() else { throw MeasureError(message: "« \(close) » manquant.") }
+                guard let d = peek() else { throw MeasureError(message: L("« %@ » manquant.", close)) }
                 i += 1
                 if d == close { break }
                 s.append(d)
@@ -95,13 +95,13 @@ private func tokenize(_ source: String) throws -> [Token] {
         case ">":
             if peek(1) == "=" { tokens.append(.op(">=")); i += 2 } else { tokens.append(.op(">")); i += 1 }
         case "&":
-            guard peek(1) == "&" else { throw MeasureError(message: "Opérateur « & » non pris en charge (utilisez &&).") }
+            guard peek(1) == "&" else { throw MeasureError(message: L("Opérateur « & » non pris en charge (utilisez &&).")) }
             tokens.append(.op("&&")); i += 2
         case "|":
-            guard peek(1) == "|" else { throw MeasureError(message: "Opérateur « | » non pris en charge (utilisez ||).") }
+            guard peek(1) == "|" else { throw MeasureError(message: L("Opérateur « | » non pris en charge (utilisez ||).")) }
             tokens.append(.op("||")); i += 2
         default:
-            throw MeasureError(message: "Caractère inattendu : « \(c) »")
+            throw MeasureError(message: L("Caractère inattendu : « %@ »", c))
         }
     }
     tokens.append(.end)
@@ -116,9 +116,9 @@ private struct Parser {
     mutating func advance() { if pos < tokens.count - 1 { pos += 1 } }
 
     mutating func parse() throws -> Expr {
-        guard current != .end else { throw MeasureError(message: "L'expression est vide.") }
+        guard current != .end else { throw MeasureError(message: L("L'expression est vide.")) }
         let e = try parseOr()
-        guard current == .end else { throw MeasureError(message: "Élément inattendu après la fin de l'expression.") }
+        guard current == .end else { throw MeasureError(message: L("Élément inattendu après la fin de l'expression.")) }
         return e
     }
 
@@ -178,7 +178,7 @@ private struct Parser {
         case .lparen:
             advance()
             let e = try parseOr()
-            guard current == .rparen else { throw MeasureError(message: "Parenthèse fermante manquante.") }
+            guard current == .rparen else { throw MeasureError(message: L("Parenthèse fermante manquante.")) }
             advance()
             return e
         case .quoted(let t):
@@ -198,7 +198,7 @@ private struct Parser {
                         break
                     }
                 }
-                guard current == .rparen else { throw MeasureError(message: "Parenthèse fermante manquante après les arguments de \(id).") }
+                guard current == .rparen else { throw MeasureError(message: L("Parenthèse fermante manquante après les arguments de %@.", id)) }
                 advance()
                 let name = id.uppercased()
                 switch name {
@@ -213,8 +213,8 @@ private struct Parser {
             case "FALSE": return .bool(false)
             default: return .table(id)
             }
-        case .end: throw MeasureError(message: "L'expression est incomplète.")
-        default: throw MeasureError(message: "Élément inattendu dans l'expression.")
+        case .end: throw MeasureError(message: L("L'expression est incomplète."))
+        default: throw MeasureError(message: L("Élément inattendu dans l'expression."))
         }
     }
 }
@@ -284,14 +284,14 @@ enum MeasureCompiler {
         switch e {
         case .number, .string, .bool, .blank: return
         case .table(let t):
-            guard m.table(t) != nil else { throw MeasureError(message: "Table introuvable : \(t)") }
+            guard m.table(t) != nil else { throw MeasureError(message: L("Table introuvable : %@", t)) }
         case .ref(let t, let n):
             guard let r = resolve(table: t, name: n, home: home, m) else {
-                throw MeasureError(message: t.map { "Colonne ou mesure introuvable : \($0)[\(n)]" } ?? "Colonne ou mesure introuvable : [\(n)]")
+                throw MeasureError(message: t.map { L("Colonne ou mesure introuvable : %@[%@]", $0, n) } ?? L("Colonne ou mesure introuvable : [%@]", n))
             }
             if case .measure(let me) = r {
                 guard !visiting.contains(me.name.lowercased()) else {
-                    throw MeasureError(message: "Référence circulaire vers la mesure [\(me.name)].")
+                    throw MeasureError(message: L("Référence circulaire vers la mesure [%@].", me.name))
                 }
                 if case .success(let inner) = parse(me.expression) {
                     try check(inner, home: me.table, m, visiting: visiting.union([me.name.lowercased()]), inCalculateFilter: false)
@@ -303,36 +303,36 @@ enum MeasureCompiler {
             try check(a, home: home, m, visiting: visiting, inCalculateFilter: false)
             try check(b, home: home, m, visiting: visiting, inCalculateFilter: false)
         case .call(let f, let args):
-            guard let arity = functions[f] else { throw MeasureError(message: "Fonction inconnue : \(f)") }
+            guard let arity = functions[f] else { throw MeasureError(message: L("Fonction inconnue : %@", f)) }
             guard arity.contains(args.count) else {
-                throw MeasureError(message: "\(f) attend \(arity.lowerBound == arity.upperBound ? "\(arity.lowerBound)" : "\(arity.lowerBound) à \(arity.upperBound)") argument(s).")
+                throw MeasureError(message: L("%@ attend %@ argument(s).", f, arity.lowerBound == arity.upperBound ? "\(arity.lowerBound)" : L("%@ à %@", arity.lowerBound, arity.upperBound)))
             }
             if aggregations.contains(f) || ((f == "MIN" || f == "MAX") && args.count == 1) {
                 guard case .ref(let t, let n) = args[0] else {
-                    throw MeasureError(message: "\(f) attend une colonne, par exemple \(f)(Table[Colonne]).")
+                    throw MeasureError(message: L("%@ attend une colonne, par exemple %@(Table[Colonne]).", f, f))
                 }
                 switch resolve(table: t, name: n, home: home, m) {
                 case .column: return
-                case .measure: throw MeasureError(message: "\(f) attend une colonne, pas une mesure ([\(n)]).")
-                case nil: throw MeasureError(message: "Colonne introuvable : \(t ?? "")[\(n)]")
+                case .measure: throw MeasureError(message: L("%@ attend une colonne, pas une mesure ([%@]).", f, n))
+                case nil: throw MeasureError(message: L("Colonne introuvable : %@[%@]", t ?? "", n))
                 }
             }
             if f == "COUNTROWS" {
                 guard case .table(let t) = args[0], m.table(t) != nil else {
-                    throw MeasureError(message: "COUNTROWS attend une table, par exemple COUNTROWS(Ventes).")
+                    throw MeasureError(message: L("COUNTROWS attend une table, par exemple COUNTROWS(Ventes)."))
                 }
                 return
             }
             if filterModifiers.contains(f) {
-                guard inCalculateFilter else { throw MeasureError(message: "\(f) ne peut être utilisé que comme filtre de CALCULATE.") }
+                guard inCalculateFilter else { throw MeasureError(message: L("%@ ne peut être utilisé que comme filtre de CALCULATE.", f)) }
                 if let a = args.first {
                     switch a {
-                    case .table(let t): guard m.table(t) != nil else { throw MeasureError(message: "Table introuvable : \(t)") }
+                    case .table(let t): guard m.table(t) != nil else { throw MeasureError(message: L("Table introuvable : %@", t)) }
                     case .ref(let t, let n):
                         guard case .column = resolve(table: t, name: n, home: home, m) else {
-                            throw MeasureError(message: "\(f) attend une table ou une colonne.")
+                            throw MeasureError(message: L("%@ attend une table ou une colonne.", f))
                         }
-                    default: throw MeasureError(message: "\(f) attend une table ou une colonne.")
+                    default: throw MeasureError(message: L("%@ attend une table ou une colonne.", f))
                     }
                 }
                 return
@@ -345,11 +345,11 @@ enum MeasureCompiler {
                         try check(a, home: home, m, visiting: visiting, inCalculateFilter: true)
                     case .binary("=", .ref(let t, let n), let v):
                         guard case .column = resolve(table: t, name: n, home: home, m) else {
-                            throw MeasureError(message: "Le filtre de CALCULATE doit porter sur une colonne.")
+                            throw MeasureError(message: L("Le filtre de CALCULATE doit porter sur une colonne."))
                         }
                         try check(v, home: home, m, visiting: visiting, inCalculateFilter: false)
                     default:
-                        throw MeasureError(message: "Filtre de CALCULATE non pris en charge. Utilisez Table[Colonne] = valeur, ALL(…), ALLSELECTED(…) ou REMOVEFILTERS(…).")
+                        throw MeasureError(message: L("Filtre de CALCULATE non pris en charge. Utilisez Table[Colonne] = valeur, ALL(…), ALLSELECTED(…) ou REMOVEFILTERS(…)."))
                     }
                 }
                 return
@@ -441,7 +441,7 @@ final class MeasureEvaluator {
     }
 
     private func eval(_ e: Expr, home: String, rows: [Int], filters: [FilterSpec], depth: Int) throws -> MValue {
-        guard depth < 50 else { throw MeasureError(message: "Imbrication trop profonde.") }
+        guard depth < 50 else { throw MeasureError(message: L("Imbrication trop profonde.")) }
         func sub(_ x: Expr) throws -> MValue { try eval(x, home: home, rows: rows, filters: filters, depth: depth + 1) }
 
         switch e {
@@ -449,16 +449,16 @@ final class MeasureEvaluator {
         case .string(let s): return .text(s)
         case .bool(let b): return .bool(b)
         case .blank: return .blank
-        case .table: throw MeasureError(message: "Une table ne peut pas être utilisée comme valeur.")
+        case .table: throw MeasureError(message: L("Une table ne peut pas être utilisée comme valeur."))
         case .ref(let t, let n):
             switch MeasureCompiler.resolve(table: t, name: n, home: home, model) {
             case .measure(let me):
                 guard case .success(let inner) = MeasureCompiler.parse(me.expression) else { return .blank }
                 return try eval(inner, home: me.table, rows: rows, filters: filters, depth: depth + 1)
             case .column:
-                throw MeasureError(message: "Une colonne doit être agrégée (SUM, AVERAGE…).")
+                throw MeasureError(message: L("Une colonne doit être agrégée (SUM, AVERAGE…)."))
             case nil:
-                throw MeasureError(message: "Référence introuvable : [\(n)]")
+                throw MeasureError(message: L("Référence introuvable : [%@]", n))
             }
         case .unary(let o, let a):
             let v = try sub(a)
@@ -505,7 +505,7 @@ final class MeasureEvaluator {
 
     private func column(_ e: Expr, home: String) throws -> FieldRef {
         guard case .ref(let t, let n) = e, case .column(let f) = MeasureCompiler.resolve(table: t, name: n, home: home, model) else {
-            throw MeasureError(message: "Colonne attendue.")
+            throw MeasureError(message: L("Colonne attendue."))
         }
         return f
     }
@@ -516,7 +516,7 @@ final class MeasureEvaluator {
         func aggregate(_ a: Aggregation) throws -> MValue {
             let fr = try column(args[0], home: home)
             guard let values = ctx.values(fr, rows) else {
-                throw MeasureError(message: "Aucune relation ne relie \(fr.table) à la table du visuel.")
+                throw MeasureError(message: L("Aucune relation ne relie %@ à la table du visuel.", fr.table))
             }
             var acc = Acc(distinct: a == .distinctCount)
             values.forEach { acc.add($0) }
@@ -536,7 +536,7 @@ final class MeasureEvaluator {
             return .number(f == "MIN" ? Swift.min(p, q) : Swift.max(p, q))
         case "COUNTROWS":
             guard case .table(let t) = args[0], let related = ctx.relatedRows(t, rows) else {
-                throw MeasureError(message: "COUNTROWS : table hors de portée du visuel.")
+                throw MeasureError(message: L("COUNTROWS : table hors de portée du visuel."))
             }
             return related.isEmpty ? .blank : .number(Double(related.count))
         case "DIVIDE":
@@ -570,7 +570,7 @@ final class MeasureEvaluator {
             }
             return try eval(args[0], home: home, rows: self.rows(for: newFilters), filters: newFilters, depth: depth + 1)
         default:
-            throw MeasureError(message: "Fonction non prise en charge ici : \(f)")
+            throw MeasureError(message: L("Fonction non prise en charge ici : %@", f))
         }
     }
 
@@ -604,7 +604,7 @@ final class MeasureEvaluator {
             }
             return current.filter { !(scope($0) && (!onlyGroup || $0.isGroup)) }
         default:
-            throw MeasureError(message: "Filtre de CALCULATE non pris en charge.")
+            throw MeasureError(message: L("Filtre de CALCULATE non pris en charge."))
         }
     }
 }

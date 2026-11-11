@@ -10,12 +10,12 @@ struct DataGridView: View {
         if let t = Engine.table(named: state.dataTableName, in: state.tables) ?? state.tables.first {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
-                    Picker("Table", selection: Binding(get: { t.name }, set: { state.dataTableName = $0 })) {
+                    Picker(L("Table"), selection: Binding(get: { t.name }, set: { state.dataTableName = $0 })) {
                         ForEach(state.tables) { Text($0.name).tag($0.name) }
                     }
                     .labelsHidden()
                     .frame(width: 220)
-                    Text("\(t.rows.count.formatted()) lignes · \(t.columns.count) colonnes")
+                    Text(L("%@ lignes · %@ colonnes", t.rows.count.formatted(), t.columns.count))
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                     if let src = t.source {
                         Text(URL(fileURLWithPath: src.path).lastPathComponent + (src.sheet.map { " › \($0)" } ?? ""))
@@ -23,7 +23,7 @@ struct DataGridView: View {
                     }
                     Spacer()
                     if t.rows.count > maxRows {
-                        Text("Affichage des \(maxRows) premières lignes").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(L("Affichage des %@ premières lignes", maxRows)).font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
                 .padding(10)
@@ -61,8 +61,8 @@ struct DataGridView: View {
         } else {
             VStack(spacing: 12) {
                 Image(systemName: "tablecells").font(.system(size: 40, weight: .light)).foregroundStyle(.secondary)
-                Text("Aucune table").font(.title3.weight(.semibold))
-                Button("Obtenir des données…") { state.importWithPanel() }
+                Text(L("Aucune table")).font(.title3.weight(.semibold))
+                Button(L("Obtenir des données…")) { state.importWithPanel() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -70,7 +70,7 @@ struct DataGridView: View {
 
     private func header(_ t: DataTable, _ col: DataColumn) -> some View {
         Menu {
-            Section("Type de données") {
+            Section(L("Type de données")) {
                 ForEach(ColumnType.allCases, id: \.self) { type in
                     Button {
                         state.convertColumn(table: t.name, column: col.name, to: type)
@@ -89,6 +89,6 @@ struct DataGridView: View {
         .menuIndicator(.hidden)
         .frame(width: colWidth - 12, alignment: .leading)
         .padding(.horizontal, 6)
-        .help("Cliquez pour changer le type de données")
+        .help(L("Cliquez pour changer le type de données"))
     }
 }
