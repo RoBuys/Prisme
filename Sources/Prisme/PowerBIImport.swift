@@ -23,8 +23,10 @@ struct PBIVisualSpec {
     var frame: CGRect
     var title: String?
     var roles: [String: [PBIField]] = [:]
-    /// Text boxes, shapes and buttons.
+    /// Text boxes, shapes, buttons and images.
     var element: ElementContent?
+    /// Image visuals: file name in the report's registered resources.
+    var imageName: String?
 }
 
 struct PBIPageSpec {
@@ -108,11 +110,18 @@ enum PowerBIImporter {
         } else {
             p.hasModel = false
         }
-        guard let layout = try? Data(contentsOf: dir.appendingPathComponent("Report/Layout")),
-              let json = jsonObject(layout) as? [String: Any] else {
+        let pbir = dir.appendingPathComponent("Report/definition")
+        if let layout = try? Data(contentsOf: dir.appendingPathComponent("Report/Layout")),
+           let json = jsonObject(layout) as? [String: Any] {
+            p.pages = parseLayout(json)
+        } else if FileManager.default.fileExists(atPath: pbir.appendingPathComponent("pages").path) {
+            // Newer files store the report in the PBIR folder format, as .pbip projects do.
+            p.pages = parsePBIR(pbir)
+        } else {
             throw ImportError(message: L("Mise en page du rapport introuvable dans « %@ ».", url.lastPathComponent))
         }
-        p.pages = parseLayout(json)
+        attachImages(&p.pages, resources: dir.appendingPathComponent("Report/StaticResources/RegisteredResources"))
+        addTableQueries(&p)
         return p
     }
 
@@ -152,6 +161,8 @@ enum PowerBIImporter {
         } else {
             throw ImportError(message: L("Rapport introuvable dans le projet « %@ ».", url.lastPathComponent))
         }
+        attachImages(&p.pages, resources: reportDir.appendingPathComponent("StaticResources/RegisteredResources"))
+        addTableQueries(&p)
         return p
     }
 
@@ -196,6 +207,11 @@ enum PowerBIImporter {
 
     static func isAutoDateTable(_ name: String) -> Bool {
         name.hasPrefix("LocalDateTable_") || name.hasPrefix("DateTableTemplate_")
+    }
+
+    /// Tables' own queries can be referenced by other queries (`Source = #"Other table"`).
+    static func addTableQueries(_ p: inout PBIProject) {
+        for t in p.tables { if let m = t.mExpression, p.queries[t.name] == nil { p.queries[t.name] = m } }
     }
 
     /// Shared M expressions of a TMSL model (parameters and helper queries).
@@ -645,8 +661,31 @@ enum PowerBIImporter {
             if literal(fill["show"]) == "false" { c.fill = nil } else if let f = color(fill["fillColor"]) { c.fill = f }
             if c.fill == nil && c.text.isEmpty { c.stroke = "C8CED8" }
             return c
+        case "image":
+            var c = ElementContent.defaults(for: .image)
+            let general = props(objects, "general")
+            c.imageFill = literal(general["imageScalingType"]) == "Fill"
+            return c
         default:
             return nil
+        }
+    }
+
+    /// Name of an image visual's registered resource.
+    static func imageName(_ objects: [String: Any]) -> String? {
+        let url = props(objects, "general")["imageUrl"] as? [String: Any]
+        let item = (url?["expr"] as? [String: Any])?["ResourcePackageItem"] as? [String: Any]
+        return item?["ItemName"] as? String
+    }
+
+    /// Loads the images of image visuals from `Report/StaticResources/RegisteredResources`.
+    static func attachImages(_ pages: inout [PBIPageSpec], resources: URL) {
+        for p in pages.indices {
+            for v in pages[p].visuals.indices {
+                guard let name = pages[p].visuals[v].imageName,
+                      let data = try? Data(contentsOf: resources.appendingPathComponent(name)) else { continue }
+                pages[p].visuals[v].element?.imageData = data
+            }
         }
     }
 
@@ -663,6 +702,7 @@ enum PowerBIImporter {
                                    width: vc["width"] as? Double ?? 300, height: vc["height"] as? Double ?? 200)
                 var spec = PBIVisualSpec(type: type, frame: frame, title: title(sv["vcObjects"]))
                 spec.element = element(type, sv["objects"] as? [String: Any] ?? [:])
+                spec.imageName = imageName(sv["objects"] as? [String: Any] ?? [:])
                 let query = sv["prototypeQuery"] as? [String: Any] ?? [:]
                 var aliases: [String: String] = [:]
                 for f in query["From"] as? [[String: Any]] ?? [] {
@@ -707,6 +747,7 @@ enum PowerBIImporter {
                                    width: pos["width"] as? Double ?? 300, height: pos["height"] as? Double ?? 200)
                 var spec = PBIVisualSpec(type: type, frame: frame, title: title(visual["visualContainerObjects"]))
                 spec.element = element(type, visual["objects"] as? [String: Any] ?? [:])
+                spec.imageName = imageName(visual["objects"] as? [String: Any] ?? [:])
                 let state = (visual["query"] as? [String: Any])?["queryState"] as? [String: Any] ?? [:]
                 for (role, value) in state {
                     let projections = (value as? [String: Any])?["projections"] as? [[String: Any]] ?? []
@@ -746,7 +787,23 @@ enum MSource {
     /// First string literal following `function(` in the expression.
     static func argument(_ m: String, after function: String, index: Int = 0) -> String? {
         guard let r = m.range(of: function + "(") else { return nil }
-        return strings(String(m[r.upperBound...])).dropFirst(index).first
+        let rest = m[r.upperBound...]
+        if index == 0 {
+            // First argument: a text literal, or a step/variable of the query bound to one (`Url = "https://…"`).
+            let t = rest.drop { $0.isWhitespace }
+            if t.first != "\"" {
+                var name = ""
+                if t.hasPrefix("#\"") { name = String(t.dropFirst(2).prefix { $0 != "\"" }) }
+                else { name = String(t.prefix { $0.isLetter || $0.isNumber || $0 == "_" }) }
+                guard !name.isEmpty else { return strings(String(rest)).first }
+                let id = NSRegularExpression.escapedPattern(for: name)
+                guard let re = try? NSRegularExpression(pattern: "(?:#\"" + id + "\"|\\b" + id + "\\b)\\s*=\\s*\"((?:[^\"]|\"\")*)\""),
+                      let match = re.firstMatch(in: m, range: NSRange(m.startIndex..., in: m)),
+                      let v = Range(match.range(at: 1), in: m) else { return nil }
+                return String(m[v]).replacingOccurrences(of: "\"\"", with: "\"")
+            }
+        }
+        return strings(String(rest)).dropFirst(index).first
     }
 
     /// [Item="x",Kind="Sheet"] style navigation values.
@@ -850,6 +907,19 @@ enum MSource {
 
     // MARK: Queries and parameters
 
+    /// Value of a constant query: `let Source = true in Source`.
+    static func constantValue(_ m: String) -> String? {
+        let t = m.replacingOccurrences(of: #"//[^\n]*|/\*[\s\S]*?\*/"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let re = try? NSRegularExpression(pattern: #"^let\s+(\w+)\s*=\s*(true|false|-?[0-9.]+|"(?:[^"]|"")*")\s+in\s+(\w+)$"#),
+              let match = re.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+              let a = Range(match.range(at: 1), in: t), let v = Range(match.range(at: 2), in: t), let b = Range(match.range(at: 3), in: t),
+              t[a] == t[b] else { return nil }
+        let value = String(t[v])
+        if value.hasPrefix("\"") { return strings(value).first }
+        return value == "true" ? "TRUE" : value == "false" ? "FALSE" : value
+    }
+
     static func isParameter(_ m: String) -> Bool { m.contains("IsParameterQuery=true") || m.contains("IsParameterQuery = true") }
 
     /// Value of a parameter query: `"value" meta [IsParameterQuery=true, …]`, or its DefaultValue.
@@ -930,6 +1000,8 @@ enum MSource {
         ("Databricks.", "Databricks"), ("AzureStorage.Tables", "Azure Tables"), ("Odbc.", "ODBC"), ("OleDb.", "OLE DB"),
         ("Exchange.Contents", "Exchange"), ("ActiveDirectory.", "Active Directory"), ("PowerPlatform.Dataflows", "Dataflows"),
         ("PowerBI.Dataflows", "Dataflows"), ("Folder.Files", "Folder (Folder.Files)"),
+        ("Web.Contents", "Web API (Web.Contents)"), ("List.Numbers", "Power Query (List.Numbers)"),
+        ("List.Dates", "Power Query (List.Dates)"), ("#table(", "Power Query (#table)"),
     ]
 
     /// Display name of the (unsupported) connector a query uses.
@@ -946,7 +1018,9 @@ enum MSource {
             return (DataSource(path: path), path)
         }
         for fn in ["Web.Contents", "AzureStorage.BlobContents"] {
-            guard m.contains(fn), let url = argument(m, after: fn) else { continue }
+            guard m.contains(fn), let url = argument(m, after: fn), url.hasPrefix("http") else { continue }
+            // API calls (relative paths, headers, keys) can't be replayed from the URL alone.
+            if fn == "Web.Contents", ["RelativePath", "Headers", "ApiKeyName", "Content="].contains(where: m.contains) { return nil }
             // A workbook or CSV hosted online is downloaded; otherwise the response is read as JSON.
             let sheet = m.contains("Excel.Workbook") ? navigation(m, "Item") : nil
             return (DataSource(sheet: sheet, kind: .web, url: url), nil)
@@ -1078,7 +1152,8 @@ extension AppState {
             var table = DataTable(name: spec.name, columns: dataCols.map { DataColumn(name: $0.name, type: Self.columnType($0.dataType)) }, rows: [])
             // Parameters resolved, helper queries followed to the actual source.
             let mExpr = spec.mExpression.map { MSource.effective($0, queries: project.queries, params: params) }
-            if let value = params[spec.queryName ?? spec.name] ?? (spec.mExpression.flatMap(MSource.parameterValue)), !dataCols.isEmpty {
+            if let value = params[spec.queryName ?? spec.name] ?? spec.mExpression.flatMap({ MSource.parameterValue($0) ?? MSource.constantValue($0) }),
+               !dataCols.isEmpty {
                 // Parameter query: a one-value table.
                 table.rows = [[Importer.coerce([.text(value)], to: table.columns[0].type)[0]]
                               + Array(repeating: .empty, count: dataCols.count - 1)]
@@ -1118,7 +1193,7 @@ extension AppState {
                 table.rows = Self.align(l, to: dataCols, types: table.columns.map(\.type))
                 loadedCount += 1
             } else if project.hasModel {
-                let connector = spec.mExpression.flatMap { MSource.connector(MSource.chain($0, queries: project.queries)) }
+                let connector = spec.mExpression.flatMap { MSource.connector($0) ?? MSource.connector(MSource.chain($0, queries: project.queries)) }
                 unsupported[connector ?? "", default: []].append(spec.name)
             }
             for c in spec.columns where c.expression != nil {
@@ -1164,7 +1239,8 @@ extension AppState {
         }
         for (name, expr) in calculatedTables { _ = fillCalculatedTable(name, expr) }
         recomputeCalculatedColumns()
-        for (name, _) in calculatedTables where Engine.table(named: name, in: tables)?.rows.isEmpty ?? false {
+        for (name, expr) in calculatedTables where (Engine.table(named: name, in: tables)?.rows.isEmpty ?? false)
+            && MeasureCompiler.validateTable(expr, model) != nil {
             notes.append(L("Table calculée « %@ » : structure importée, données non calculées (DAX non pris en charge).", name))
         }
         let invalid = measures.filter { MeasureCompiler.validate($0.expression, home: $0.table, name: $0.name, model) != nil }
@@ -1317,7 +1393,8 @@ extension AppState {
         "tableEx": .table, "table": .table, "pivotTable": .matrix, "slicer": .slicer, "advancedSlicerVisual": .slicer,
         "scatterChart": .scatter, "gauge": .gauge, "kpi": .kpi, "map": .map, "filledMap": .map, "azureMap": .map,
         "shapeMap": .map, "waterfallChart": .waterfall, "funnel": .funnel, "treemap": .donut, "ribbonChart": .stackedColumn,
-        "textbox": .text, "basicShape": .shape, "shape": .shape, "actionButton": .button,
+        "textbox": .text, "basicShape": .shape, "shape": .shape, "actionButton": .button, "image": .image,
+        "textSlicer": .slicer, "listSlicer": .slicer,
     ]
 
     private func fieldRef(_ f: PBIField) -> FieldRef? {

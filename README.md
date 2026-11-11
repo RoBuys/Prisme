@@ -49,10 +49,12 @@ import data, then build interactive reports with drag and drop. The interface is
   `PREVIOUSYEAR`), text and date functions (`&`, `UPPER`, `LOWER`, `LEN`, `LEFT`, `RIGHT`, `YEAR`, `MONTH`, `DAY`).
   Plus `VAR … RETURN`, `SWITCH`, `SELECTEDVALUE`, `HASONEVALUE`, `ISFILTERED`, `VALUES`, `RANKX`, `TOPN`,
   `ALLEXCEPT`, `KEEPFILTERS`, `USERELATIONSHIP`, `LOOKUPVALUE`, `DATEDIFF`, `EOMONTH`, `DATE`, `TODAY`, `FORMAT`,
-  `CONCATENATE`, `INT`, `MOD`, `POWER`, `SQRT`, `VALUE`, and **quick measures** in the editor (year to date, previous
+  `CONCATENATE`, `INT`, `MOD`, `POWER`, `SQRT`, `VALUE`, `CONTAINSSTRING`, `UNICHAR`, `IFERROR`, `WEEKDAY`,
+  `DISTINCTCOUNTNOBLANK`, `NOT x` without parentheses, case-insensitive names, and **quick measures** in the editor (year to date, previous
   year, year-over-year %, running total, % of total, rank, average per category).
   **Table functions**: `SUMMARIZE`, `SUMMARIZECOLUMNS`, `ADDCOLUMNS`, `SELECTCOLUMNS`, `CALCULATETABLE`, `DISTINCT`,
-  usable in iterators, `COUNTROWS`, `RANKX`, `TOPN` and as `CALCULATE` filters, and **table variables**
+  `CALENDAR`, `CALENDARAUTO`, `GENERATESERIES`, usable in iterators, `COUNTROWS`, `ISEMPTY`, `RANKX`, `TOPN` and as
+  `CALCULATE` filters (boolean filters on one column too: `OR(T[C] = 1, T[C] >= 3)`, `NOT ISBLANK(T[C])`), **table variables**
   (`VAR t = FILTER(…) RETURN SUMX(t, [Total])`). Example:
   `MAXX(SUMMARIZE(Ventes, Ventes[Région], "CA", [Chiffre d'affaires]), [CA])`.
 - **Calculated tables** (**Nouvelle table** / New table): a table expression (`SUMMARIZE`, `ADDCOLUMNS`, `FILTER`,
@@ -87,7 +89,8 @@ import data, then build interactive reports with drag and drop. The interface is
   converted (unsupported visuals or DAX, calculated tables, bidirectional relationships), grouped by cause and
   naming the connector of sources Prisme can't reach (Dataverse, SQL Server, SharePoint…). Older templates whose
   queries live in the `DataMashup` package are read too; Power Query parameters are filled in (and substituted in
-  file paths), helper queries are followed to the actual source, and text boxes, shapes and buttons are imported.
+  file paths), helper queries are followed to the actual source, and text boxes, shapes, buttons and images are
+  imported. Newer templates storing the report in the PBIR folder format inside the .pbit are read as well.
 - **Page elements**: text boxes (with `{Measure}` placeholders showing live values), images, shapes and buttons
   (⌘-click to go to a page, apply a bookmark, go back after a drillthrough or open a link).
 - **Saving** reports (data included) as `.prisme` files.
@@ -153,7 +156,8 @@ renewed automatically.
 ## Known limitations
 
 - No many-to-many relationships, no bidirectional filtering.
-- The measure language is a subset of DAX: no `CROSSJOIN`, `UNION`, `GENERATE`, `GROUPBY`, no calculation groups.
+- The measure language is a subset of DAX: no `CROSSJOIN`, `UNION`, `GENERATE`, `GROUPBY`, no table constructors
+  (`{ … }`, used by field parameters), no calculation groups.
 - .pbit export: date levels on an axis (year, month…) are exported as the date column (Power BI's auto date
   tables aren't generated); images, shapes, buttons, page filters and slicer selections aren't exported. The
   template is checked by reimporting it into Prisme; opening it in Power BI Desktop hasn't been tested on Windows.

@@ -207,7 +207,7 @@ struct DataModel {
 
     func table(_ name: String?) -> DataTable? {
         guard let name else { return nil }
-        return tables.first { $0.name == name }
+        return tables.first { $0.name == name } ?? tables.first { $0.name.caseInsensitiveEquals(name) }
     }
 
     func column(_ f: FieldRef) -> DataColumn? {

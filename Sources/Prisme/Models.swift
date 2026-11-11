@@ -72,8 +72,9 @@ struct DataTable: Identifiable {
     /// DAX expression of a calculated table (its rows are recomputed from the model).
     var expression: String?
 
+    /// Exact name first, then case-insensitive (DAX and Power Query names are case-insensitive).
     func columnIndex(_ name: String) -> Int? {
-        columns.firstIndex { $0.name == name }
+        columns.firstIndex { $0.name == name } ?? columns.firstIndex { $0.name.caseInsensitiveEquals(name) }
     }
 }
 

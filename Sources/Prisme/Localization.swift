@@ -738,6 +738,8 @@ enum Strings {
         "Modifier la table calculée…": "Edit Calculated Table…",
         "Résultat : ": "Result: ",
         "Nouvelle table": "New table",
+        "%@ : période trop longue.": "%@: period too long.",
+        "GENERATESERIES : pas invalide.": "GENERATESERIES: invalid step.",
         "Source non reconnue (seuls CSV, Excel, JSON, web, PostgreSQL et MySQL sont rechargés), tables vides : %@.": "Unrecognized source (only CSV, Excel, JSON, web, PostgreSQL and MySQL are reloaded), empty tables: %@.",
         "Source %@ non prise en charge, tables vides : %@.": "%@ source isn't supported, empty tables: %@.",
         "Un modèle .pbit ne contient pas de données : utilisez « Changer la source… » pour relier ces tables à un fichier.": "A .pbit template holds no data: use “Change Source…” to point these tables to a file.",

@@ -107,5 +107,42 @@ extension PrismeTests {
             #expect(visuals.dropFirst().first?.element.fill == "3B79B7")
             #expect(visuals.last?.element.text == "Go")
         }
+
+        /// Newer templates: the report is stored in the PBIR folder format inside the .pbit.
+        @Test func importsAPBIRTemplate() throws {
+            func json(_ o: Any) throws -> Data { try JSONSerialization.data(withJSONObject: o) }
+            let csv = Fixture.url("ventes.csv").path
+            let schema: [String: Any] = ["model": ["tables": [
+                ["name": "Ventes", "columns": [["name": "Région", "dataType": "string", "sourceColumn": "Région"]],
+                 "partitions": [["name": "p", "source": ["type": "m", "expression":
+                    "let Source = Csv.Document(File.Contents(\"\(csv)\"), [Delimiter=\";\"]), P = Table.PromoteHeaders(Source) in P"]]]],
+            ]]]
+            let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+            let image: [String: Any] = ["position": ["x": 0, "y": 0, "width": 100, "height": 50], "visual": ["visualType": "image",
+                "objects": ["general": [["properties": ["imageUrl": ["expr": ["ResourcePackageItem":
+                    ["PackageName": "RegisteredResources", "PackageType": 1, "ItemName": "logo123.png"]]]]]]]]]
+            let slicer: [String: Any] = ["position": ["x": 0, "y": 60, "width": 200, "height": 40], "visual": ["visualType": "textSlicer",
+                "query": ["queryState": ["Values": ["projections": [["field": ["Column": ["Expression": ["SourceRef": ["Entity": "Ventes"]],
+                                                                                           "Property": "Région"]]]]]]]]]
+            var z = ZipWriter()
+            z.add("DataModelSchema", PBITExporter.utf16(String(decoding: try json(schema), as: UTF8.self)))
+            z.add("Report/definition/pages/pages.json", try json(["pageOrder": ["p1"]]))
+            z.add("Report/definition/pages/p1/page.json", try json(["displayName": "Accueil", "width": 1280, "height": 720]))
+            z.add("Report/definition/pages/p1/visuals/a/visual.json", try json(image))
+            z.add("Report/definition/pages/p1/visuals/b/visual.json", try json(slicer))
+            z.add("Report/StaticResources/RegisteredResources/logo123.png", png)
+            let url = Fixture.temp("PBIR.pbit")
+            try z.finish().write(to: url)
+
+            Loc.language = .fr
+            let st = AppState()
+            st.importPowerBI(url, askForFiles: false)
+            #expect(st.pages.map(\.name) == ["Accueil"])
+            let visuals = st.pages.first?.visuals ?? []
+            #expect(visuals.map(\.type) == [.image, .slicer])
+            #expect(visuals.first?.element.imageData == png)
+            #expect(visuals.last?.axis.first?.column == "Région")
+            #expect(st.table("Ventes").rows.count == 4)
+        }
     }
 }

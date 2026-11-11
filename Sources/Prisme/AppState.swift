@@ -1150,8 +1150,16 @@ final class AppState {
             guard let expr = tables[ti].expression else { continue }
             var m = model
             m.tables.remove(at: ti)
-            guard let (cols, rows) = try? computeTable(expression: expr, model: m) else { continue }
+            guard var (cols, rows) = try? computeTable(expression: expr, model: m) else { continue }
             let calc = tables[ti].columns.filter { $0.expression != nil }
+            // Keep the table's column names: matched by name, others by position (a what-if parameter's
+            // GENERATESERIES column "Value" is named after the parameter).
+            let existing = tables[ti].columns.filter { $0.expression == nil }.map(\.name)
+            var unmatched = existing.filter { n in !cols.contains { $0.name.caseInsensitiveEquals(n) } }
+            for i in cols.indices {
+                if let n = existing.first(where: { $0.caseInsensitiveEquals(cols[i].name) }) { cols[i].name = n }
+                else if !unmatched.isEmpty { cols[i].name = unmatched.removeFirst() }
+            }
             tables[ti].columns = cols + calc
             tables[ti].rows = rows.map { $0 + Array(repeating: .empty, count: calc.count) }
         }
