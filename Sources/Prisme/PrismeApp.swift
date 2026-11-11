@@ -40,6 +40,7 @@ struct PrismeApp: App {
             AppState.shared.selectPage(AppState.shared.pages[n - 1].id)
         }
         if args.contains("--powerbi") { AppState.shared.mode = .powerbi }
+        if args.contains("--data") { AppState.shared.mode = .data }
     }
 
     var body: some Scene {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// "Données" view: browse the rows of a table and change column types.
+/// "Données" view: browse the rows of a table, change column types and add transformation steps.
 struct DataGridView: View {
     @Environment(AppState.self) private var state
     private let maxRows = 1000
@@ -8,6 +8,7 @@ struct DataGridView: View {
 
     var body: some View {
         if let t = Engine.table(named: state.dataTableName, in: state.tables) ?? state.tables.first {
+            HStack(spacing: 0) {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Picker(L("Table"), selection: Binding(get: { t.name }, set: { state.dataTableName = $0 })) {
@@ -22,6 +23,7 @@ struct DataGridView: View {
                             .font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
                     }
                     Spacer()
+                    transformMenu(t)
                     if t.rows.count > maxRows {
                         Text(L("Affichage des %@ premières lignes", maxRows)).font(.system(size: 11)).foregroundStyle(.secondary)
                     }
@@ -58,6 +60,14 @@ struct DataGridView: View {
                     }
                 }
             }
+            Divider()
+            StepsPane(table: t).frame(width: 240)
+            }
+            .sheet(item: Binding(get: { state.stepDraft }, set: { state.stepDraft = $0 })) { d in
+                if let table = Engine.table(named: d.table, in: state.tables) {
+                    StepEditor(step: d.step, table: table).environment(state)
+                }
+            }
         } else {
             VStack(spacing: 12) {
                 Image(systemName: "tablecells").font(.system(size: 40, weight: .light)).foregroundStyle(.secondary)
@@ -66,6 +76,33 @@ struct DataGridView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func step(_ kind: TransformStep.Kind, _ t: DataTable, column: String = "", text: String = "") {
+        state.stepDraft = StepDraft(step: TransformStep(kind: kind, column: column.isEmpty ? (t.columns.first { $0.expression == nil }?.name ?? "") : column,
+                                                        text: text), table: t.name)
+    }
+
+    private func transformMenu(_ t: DataTable) -> some View {
+        Menu {
+            Button(L("Filtrer les lignes…")) { step(.filterRows, t) }
+            Button(L("Remplacer les valeurs…")) { step(.replaceValues, t) }
+            Button(L("Fractionner une colonne…")) { step(.splitColumn, t, text: ",") }
+            Divider()
+            Button(L("Supprimer les doublons")) { state.addStep(TransformStep(kind: .removeDuplicates), to: t.name) }
+            Button(L("Supprimer les lignes vides")) { state.addStep(TransformStep(kind: .removeBlankRows), to: t.name) }
+            Button(L("Conserver les premières lignes…")) { step(.keepTopRows, t) }
+            Button(L("Ajouter les lignes d'une autre table…")) {
+                state.stepDraft = StepDraft(step: TransformStep(kind: .appendTable, text: state.tables.first { $0.name != t.name }?.name ?? ""), table: t.name)
+            }
+            .disabled(state.tables.count < 2)
+            Button(L("Ajouter une colonne d'index…")) { step(.addIndex, t, text: "Index") }
+            Divider()
+            Button(L("Nouvelle colonne calculée…")) { state.newColumn(in: t.name) }
+        } label: {
+            Label(L("Transformer"), systemImage: "wand.and.rays")
+        }
+        .fixedSize()
     }
 
     private func header(_ t: DataTable, _ col: DataColumn) -> some View {
@@ -79,6 +116,22 @@ struct DataGridView: View {
                     }
                 }
             }
+            if col.expression == nil {
+                Section(L("Transformer")) {
+                    Button(L("Renommer…")) { step(.renameColumn, t, column: col.name, text: col.name) }
+                    Button(L("Filtrer…")) { step(.filterRows, t, column: col.name) }
+                    Button(L("Remplacer les valeurs…")) { step(.replaceValues, t, column: col.name) }
+                    Button(L("Fractionner…")) { step(.splitColumn, t, column: col.name, text: ",") }
+                    Button(L("Supprimer les espaces")) { state.addStep(TransformStep(kind: .trim, column: col.name), to: t.name) }
+                    Button(L("Remplir vers le bas")) { state.addStep(TransformStep(kind: .fillDown, column: col.name), to: t.name) }
+                    Button(L("Supprimer la colonne"), role: .destructive) {
+                        state.addStep(TransformStep(kind: .removeColumn, column: col.name), to: t.name)
+                    }
+                }
+            } else {
+                Button(L("Modifier la colonne calculée…")) { state.editColumn(table: t.name, column: col) }
+                Button(L("Supprimer la colonne"), role: .destructive) { state.deleteColumn(table: t.name, column: col.name) }
+            }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: col.type.symbol).font(.system(size: 10)).foregroundStyle(.secondary)
@@ -89,6 +142,6 @@ struct DataGridView: View {
         .menuIndicator(.hidden)
         .frame(width: colWidth - 12, alignment: .leading)
         .padding(.horizontal, 6)
-        .help(L("Cliquez pour changer le type de données"))
+        .help(L("Cliquez pour changer le type ou transformer la colonne"))
     }
 }

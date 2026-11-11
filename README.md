@@ -10,6 +10,10 @@ import data, then build interactive reports with drag and drop. The interface is
   UTF-8 or Windows-1252) and Excel `.xlsx` (every sheet, Excel dates recognized). Drop a file on the page or use
   **Obtenir des données** (Get data). **Actualiser** (Refresh) re-reads the source files.
 - **Automatic column typing** (number, text, date), editable in the **Données** (Data) view.
+- **Data transformations** (Power Query-like **applied steps**, in the Data view: **Transform** menu or a column
+  header): rename, remove, change type, filter rows, replace values, split, trim, fill down, remove duplicates /
+  blank rows, keep first rows, append another table, add an index column. Steps are replayed on every refresh and
+  can be removed in any order; a failing step is flagged and skipped.
 - **16:9 report canvas** with multiple pages: visuals can be moved, resized and duplicated. The page scales to the
   window, text included.
 - **Visuals**: column, bar, line, area, pie, donut, card, table, slicer, **matrix** (cross-tab with row and column
@@ -62,7 +66,8 @@ without a full Xcode, the SwiftUI macros of the macOS 27 SDK are not available.
 Development options:
 
 - `Prisme --inspect file.csv`: prints how a file is imported, then quits.
-- `Prisme --sample`: starts with the sample dataset (`--model` opens the Model view, `--powerbi` the Power BI view,
+- `Prisme --sample`: starts with the sample dataset (`--page 2` selects a page, `--data` / `--model` / `--powerbi`
+  open those views,
   `--edit-measure "Name"` opens a measure's editor).
 - `Prisme --snapshot capture.png`: saves an image of the window 3 s after launch.
 
@@ -97,7 +102,7 @@ renewed automatically.
 - No many-to-many relationships, no bidirectional filtering.
 - The measure language is a subset of DAX: no variables (`VAR`), no `SWITCH`, no calculated tables; `ALL` on a table
   iterated by `SUMX` still respects other filters on that table's rows.
-- No query editor (Power Query).
+- Transformations cover common steps only (no merge/join, pivot/unpivot or custom M code).
 
 ## Structure
 
@@ -113,6 +118,9 @@ renewed automatically.
 | `VisualViews.swift` | Visual rendering (Swift Charts) |
 | `Panes.swift` | Visualizations, Data and Filters panes |
 | `DataGridView.swift` | Data view |
+| `Transforms.swift` | Transformation steps, applied-steps pane and step editor |
+| `MoreVisuals.swift` | Scatter, gauge, KPI and map visuals |
+| `Export.swift` | PDF / PNG / CSV export |
 | `ModelView.swift` | Model view and Relationships pane |
 | `PowerBIAuth.swift` | Microsoft Entra sign-in (PKCE) and Keychain storage |
 | `PowerBIService.swift` | Power BI REST API client and state |

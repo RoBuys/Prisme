@@ -16,6 +16,12 @@ struct MeasureDraft: Identifiable {
     var originalName: String?
 }
 
+struct StepDraft: Identifiable {
+    let id = UUID()
+    var step: TransformStep
+    var table: String
+}
+
 struct CrossFilter: Equatable {
     var pageID: UUID
     var visualID: UUID
@@ -32,6 +38,9 @@ final class AppState {
     var measures: [Measure] = []
     /// The measure being created or edited (drives the editor sheet).
     var measureDraft: MeasureDraft?
+    /// The transformation step being set up (drives the step sheet), and errors of applied steps per table.
+    var stepDraft: StepDraft?
+    var stepErrors: [String: [UUID: String]] = [:]
     var modelLayout: [String: CGPoint] = [:]
     /// Report color theme (see `Theme.themes`).
     var theme = Theme.defaultName
@@ -526,7 +535,13 @@ final class AppState {
             }
             do {
                 for i in tables.indices {
-                    if let u = updates[tables[i].name] {
+                    if let u = updates[tables[i].name], !tables[i].steps.isEmpty {
+                        // New source data becomes the base of the recipe, which is replayed.
+                        var base = u
+                        base.name = tables[i].name
+                        tables[i].base = [base]
+                        reapplySteps(i)
+                    } else if let u = updates[tables[i].name] {
                         // Keep calculated columns: re-append their definitions, then recompute them.
                         let calculated = tables[i].columns.filter { $0.expression != nil }
                         tables[i].columns = u.columns + calculated
@@ -590,10 +605,14 @@ final class AppState {
     func convertColumn(table: String, column: String, to type: ColumnType) {
         guard let ti = tables.firstIndex(where: { $0.name == table }), let ci = tables[ti].columnIndex(column),
               tables[ti].columns[ci].type != type else { return }
-        let raw = Importer.cellsToRaw(tables[ti].rows.map { $0[ci] })
-        let converted = Importer.coerce(raw, to: type)
-        for r in tables[ti].rows.indices { tables[ti].rows[r][ci] = converted[r] }
-        tables[ti].columns[ci].type = type
+        if tables[ti].columns[ci].expression == nil {
+            addStep(TransformStep(kind: .changeType, column: column, type: type), to: table)
+        } else {
+            let raw = Importer.cellsToRaw(tables[ti].rows.map { $0[ci] })
+            let converted = Importer.coerce(raw, to: type)
+            for r in tables[ti].rows.indices { tables[ti].rows[r][ci] = converted[r] }
+            tables[ti].columns[ci].type = type
+        }
         // Fields whose aggregation no longer makes sense fall back to a count.
         for p in pages.indices {
             for v in pages[p].visuals.indices {
