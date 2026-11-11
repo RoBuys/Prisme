@@ -28,6 +28,7 @@ struct PrismeApp: App {
         if args.contains("--sample") {
             AppState.shared.loadSample()
             AppState.shared.isDirty = false
+            AppState.shared.resetHistory()
         }
         if let i = args.firstIndex(of: "--edit-measure"), i + 1 < args.count,
            let m = AppState.shared.measures.first(where: { $0.name == args[i + 1] }) {
@@ -53,6 +54,10 @@ struct PrismeApp: App {
                 Button("Charger les données d'exemple") { state.loadSample() }
                 Button("Actualiser les données") { state.refreshAll() }.keyboardShortcut("r")
             }
+            CommandGroup(replacing: .undoRedo) {
+                Button("Annuler") { Self.undoOrTextUndo(redo: false) }.keyboardShortcut("z")
+                Button("Rétablir") { Self.undoOrTextUndo(redo: true) }.keyboardShortcut("z", modifiers: [.command, .shift])
+            }
             CommandGroup(replacing: .saveItem) {
                 Button("Enregistrer") { state.save() }.keyboardShortcut("s")
                 Button("Enregistrer sous…") { state.saveAs() }.keyboardShortcut("s", modifiers: [.command, .shift])
@@ -74,6 +79,18 @@ struct PrismeApp: App {
                 Button("Nouvelle page") { state.addPage() }.keyboardShortcut("t")
             }
         }
+    }
+}
+
+extension PrismeApp {
+    /// ⌘Z goes to the text being edited when a text field has focus, otherwise to the document.
+    static func undoOrTextUndo(redo: Bool) {
+        if let text = NSApp.keyWindow?.firstResponder as? NSTextView, let um = text.undoManager,
+           redo ? um.canRedo : um.canUndo {
+            redo ? um.redo() : um.undo()
+            return
+        }
+        redo ? AppState.shared.redo() : AppState.shared.undo()
     }
 }
 

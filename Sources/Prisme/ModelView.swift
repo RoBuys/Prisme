@@ -62,7 +62,7 @@ struct ModelView: View {
         let p = state.modelLayout[name] ?? defaultPosition(name)
         state.modelLayout[name] = CGPoint(x: max(0, p.x + d.width), y: max(0, p.y + d.height))
         dragging[name] = nil
-        state.isDirty = true
+        state.didChange()
     }
 
     private func cardHeight(_ t: DataTable) -> CGFloat {

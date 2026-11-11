@@ -38,6 +38,77 @@ final class AppState {
     var dataTableName: String?
     var fileURL: URL?
     var isDirty = false
+
+    // MARK: Undo / redo (document snapshots; arrays are copy-on-write, so unchanged tables cost nothing)
+
+    struct Snapshot {
+        var tables: [DataTable]
+        var pages: [ReportPage]
+        var relationships: [Relationship]
+        var measures: [Measure]
+        var modelLayout: [String: CGPoint]
+        var currentPageID: UUID
+    }
+
+    private var undoStack: [Snapshot] = []
+    private var redoStack: [Snapshot] = []
+    private var lastSnapshot: Snapshot?
+    private var lastChange = Date.distantPast
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    private func snapshot() -> Snapshot {
+        Snapshot(tables: tables, pages: pages, relationships: relationships, measures: measures,
+                 modelLayout: modelLayout, currentPageID: currentPageID)
+    }
+
+    /// Records a change for undo and marks the document as modified.
+    /// Changes less than 0.6 s apart (typing, for example) are merged into one undo step.
+    func didChange() {
+        let now = Date()
+        if let last = lastSnapshot, now.timeIntervalSince(lastChange) > 0.6 {
+            undoStack.append(last)
+            if undoStack.count > 100 { undoStack.removeFirst() }
+        }
+        lastChange = now
+        lastSnapshot = snapshot()
+        redoStack.removeAll()
+        isDirty = true
+    }
+
+    func resetHistory() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+        lastSnapshot = snapshot()
+        lastChange = .distantPast
+    }
+
+    func undo() {
+        guard let prev = undoStack.popLast() else { return }
+        redoStack.append(lastSnapshot ?? snapshot())
+        restore(prev)
+    }
+
+    func redo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(lastSnapshot ?? snapshot())
+        restore(next)
+    }
+
+    private func restore(_ s: Snapshot) {
+        tables = s.tables
+        pages = s.pages
+        relationships = s.relationships
+        measures = s.measures
+        modelLayout = s.modelLayout
+        currentPageID = pages.contains { $0.id == s.currentPageID } ? s.currentPageID : pages[0].id
+        if let id = selectedVisualID, visual(id) == nil { selectedVisualID = nil }
+        crossFilter = nil
+        if let n = dataTableName, !tables.contains(where: { $0.name == n }) { dataTableName = tables.first?.name }
+        lastSnapshot = s
+        lastChange = .distantPast
+        isDirty = true
+    }
     var isImporting = false
     var showFilters = false
     var alertMessage: String?
@@ -48,6 +119,7 @@ final class AppState {
         let p = ReportPage(name: "Page 1")
         pages = [p]
         currentPageID = p.id
+        resetHistory()
     }
 
     // MARK: Accessors
@@ -80,14 +152,14 @@ final class AppState {
 
     func mutatePage(_ body: (inout ReportPage) -> Void) {
         body(&pages[pageIndex])
-        isDirty = true
+        didChange()
     }
 
     func mutateVisual(_ id: UUID, _ body: (inout Visual) -> Void) {
         for p in pages.indices {
             if let i = pages[p].visuals.firstIndex(where: { $0.id == id }) {
                 body(&pages[p].visuals[i])
-                isDirty = true
+                didChange()
                 return
             }
         }
@@ -167,7 +239,7 @@ final class AppState {
         for p in pages.indices { pages[p].visuals.removeAll { $0.id == id } }
         if selectedVisualID == id { selectedVisualID = nil }
         if crossFilter?.visualID == id { crossFilter = nil }
-        isDirty = true
+        didChange()
     }
 
     func duplicateVisual(_ id: UUID? = nil) {
@@ -319,7 +391,7 @@ final class AppState {
     func addPage() {
         let p = ReportPage(name: "Page \(pages.count + 1)")
         pages.append(p)
-        isDirty = true
+        didChange()
         selectPage(p.id)
     }
 
@@ -331,14 +403,14 @@ final class AppState {
         p.visuals = p.visuals.map { var v = $0; v.id = UUID(); return v }
         p.filters = p.filters.map { var f = $0; f.id = UUID(); return f }
         pages.insert(p, at: i + 1)
-        isDirty = true
+        didChange()
         selectPage(p.id)
     }
 
     func deletePage(_ id: UUID) {
         guard pages.count > 1, let i = pages.firstIndex(where: { $0.id == id }) else { return }
         pages.remove(at: i)
-        isDirty = true
+        didChange()
         if currentPageID == id { selectPage(pages[max(0, i - 1)].id) }
     }
 
@@ -346,7 +418,7 @@ final class AppState {
         let n = name.trimmingCharacters(in: .whitespaces)
         guard !n.isEmpty, let i = pages.firstIndex(where: { $0.id == id }) else { return }
         pages[i].name = n
-        isDirty = true
+        didChange()
     }
 
     // MARK: Tables
@@ -389,7 +461,7 @@ final class AppState {
                     if dataTableName == nil { dataTableName = t.name }
                 }
                 if !added.isEmpty { detectRelationships(for: added) }
-                if !loaded.isEmpty { isDirty = true }
+                if !loaded.isEmpty { didChange() }
                 isImporting = false
                 if !errors.isEmpty { alertMessage = errors.joined(separator: "\n\n") }
             }
@@ -426,7 +498,7 @@ final class AppState {
                         tables[i].rows = u.rows
                     }
                 }
-                if !updates.isEmpty { isDirty = true }
+                if !updates.isEmpty { didChange() }
                 isImporting = false
                 if !errors.isEmpty { alertMessage = errors.joined(separator: "\n") }
             }
@@ -458,7 +530,7 @@ final class AppState {
         if let p = modelLayout.removeValue(forKey: old) { modelLayout[n] = p }
         if dataTableName == old { dataTableName = n }
         crossFilter = nil
-        isDirty = true
+        didChange()
     }
 
     func deleteTable(_ name: String) {
@@ -476,7 +548,7 @@ final class AppState {
         }
         if dataTableName == name { dataTableName = tables.first?.name }
         crossFilter = nil
-        isDirty = true
+        didChange()
     }
 
     func convertColumn(table: String, column: String, to type: ColumnType) {
@@ -501,7 +573,7 @@ final class AppState {
                 }
             }
         }
-        isDirty = true
+        didChange()
     }
 
     func loadSample() {
@@ -516,7 +588,7 @@ final class AppState {
         } else {
             pages.append(page)
         }
-        isDirty = true
+        didChange()
         selectPage(page.id)
         mode = .report
     }
@@ -544,7 +616,7 @@ final class AppState {
         let active = !m.connected(many.table, one.table)
         relationships.append(Relationship(fromTable: many.table, fromColumn: many.column,
                                           toTable: one.table, toColumn: one.column, isActive: active))
-        isDirty = true
+        didChange()
         crossFilter = nil
         return active ? nil : "Relation créée mais inactive : ces tables sont déjà reliées par un autre chemin."
     }
@@ -552,7 +624,7 @@ final class AppState {
     func deleteRelationship(_ id: UUID) {
         relationships.removeAll { $0.id == id }
         crossFilter = nil
-        isDirty = true
+        didChange()
     }
 
     func setRelationshipActive(_ id: UUID, _ active: Bool) {
@@ -567,7 +639,7 @@ final class AppState {
         }
         relationships[i].isActive = active
         crossFilter = nil
-        isDirty = true
+        didChange()
     }
 
     /// Links columns that share a name and a type when one side has unique values (like Power BI's autodetect).
@@ -650,7 +722,7 @@ final class AppState {
         } else {
             measures.append(Measure(name: name, table: d.table, expression: d.expression, format: d.format))
         }
-        isDirty = true
+        didChange()
         return nil
     }
 
@@ -661,7 +733,7 @@ final class AppState {
                 pages[p].visuals[v].values.removeAll { $0.measure && $0.field == m.field }
             }
         }
-        isDirty = true
+        didChange()
     }
 
     /// Preview of a draft over all rows (no filters).
@@ -725,6 +797,7 @@ final class AppState {
         fileURL = nil
         isDirty = false
         mode = .report
+        resetHistory()
     }
 
     func openDocument() {
@@ -751,6 +824,7 @@ final class AppState {
             fileURL = url
             isDirty = false
             mode = .report
+            resetHistory()
         } catch {
             alertMessage = "Impossible d'ouvrir « \(url.lastPathComponent) » : \(error.localizedDescription)"
         }

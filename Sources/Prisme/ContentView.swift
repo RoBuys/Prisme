@@ -89,6 +89,8 @@ struct RibbonView: View {
             RibbonGroup("Fichier") {
                 RibbonButton("Ouvrir", "folder") { state.openDocument() }
                 RibbonButton("Enregistrer", "square.and.arrow.down") { state.save() }
+                RibbonButton("Annuler", "arrow.uturn.backward") { state.undo() }.disabled(!state.canUndo)
+                RibbonButton("Rétablir", "arrow.uturn.forward") { state.redo() }.disabled(!state.canRedo)
             }
             RibbonDivider()
             RibbonGroup("Données") {
