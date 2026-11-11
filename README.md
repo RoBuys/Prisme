@@ -28,6 +28,10 @@ import data, then build interactive reports with drag and drop. The interface is
   references, and `CALCULATE(expr, Table[Column] = value, ALL(…), ALLSELECTED(…), REMOVEFILTERS(…))`. The editor
   validates the expression as you type and previews its value; formats: integer, decimal, percentage, currency.
   Example: `Part du CA = DIVIDE([Chiffre d'affaires], CALCULATE([Chiffre d'affaires], ALLSELECTED(Ventes)))`.
+- **Undo / redo** (⌘Z / ⇧⌘Z) for every document change.
+- **Hover tooltips** on charts, optional **data labels**, and per-visual **formatting**: legend, gridlines, axis
+  titles, main color, value format, sorting, **Top N**; click a table header to sort. Five report **themes**
+  (select no visual to see the theme picker).
 - **Saving** reports (data included) as `.prisme` files.
 - **Power BI reports shared with you** (**Power BI** view, cloud icon): sign in with your Microsoft work account,
   browse My workspace and shared reports, workspaces and apps, and display reports interactively (embedded with the
@@ -83,7 +87,6 @@ renewed automatically.
 - Limited measure language: no iterators (`SUMX`, `FILTER`), no time intelligence (`TOTALYTD`,
   `SAMEPERIODLASTYEAR`), no calculated columns; `CALCULATE` only accepts equality filters.
 - No query editor (Power Query).
-- No undo / redo.
 
 ## Structure
 

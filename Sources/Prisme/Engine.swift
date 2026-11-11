@@ -114,6 +114,9 @@ struct ChartPoint: Identifiable {
 }
 
 struct ChartData {
+    var format: MeasureFormat = .auto
+    var valueTitle = ""
+    var categoryTitle = ""
     var points: [ChartPoint] = []
     var categories: [String] = []
     var series: [String] = []
@@ -384,10 +387,18 @@ enum Engine {
         }
     }
 
-    static func format(_ d: Double?, _ vf: ValueField, _ m: DataModel, compact: Bool = false) -> String {
+    static func format(_ d: Double?, _ vf: ValueField, _ m: DataModel, compact: Bool = false,
+                       override: MeasureFormat = .auto) -> String {
         guard let d else { return "" }
-        let fmt = vf.measure ? (m.measure(for: vf.field)?.format ?? .auto) : .auto
+        let fmt = override != .auto ? override : (vf.measure ? (m.measure(for: vf.field)?.format ?? .auto) : .auto)
         return Fmt.measure(d, fmt, compact: compact)
+    }
+
+    /// Number format of a chart's values: the visual's setting, else the first measure's format.
+    static func valueFormat(_ v: Visual, _ m: DataModel) -> MeasureFormat {
+        if v.fmt.valueFormat != .auto { return v.fmt.valueFormat }
+        if let vf = v.values.first, vf.measure { return m.measure(for: vf.field)?.format ?? .auto }
+        return .auto
     }
 
     // MARK: Charts
@@ -431,10 +442,21 @@ enum Engine {
         var totals: [GroupKey: Double] = [:]
         for (k, r) in results { totals[k.cat, default: 0] += r[0] ?? 0 }
         var cats = Array(totals.keys)
-        let byValue = m.column(ax)?.type == .text && v.type != .line && v.type != .area
-        if byValue { cats.sort { (totals[$0] ?? 0) > (totals[$1] ?? 0) } } else { cats.sort() }
-        let limit = v.type.isPie ? 30 : (v.type == .line || v.type == .area ? 1000 : 100)
+        let isTrend = v.type == .line || v.type == .area
+        var mode = v.fmt.sort
+        if mode == .auto { mode = m.column(ax)?.type == .text && !isTrend ? .valueDesc : .categoryAsc }
+        switch mode {
+        case .valueDesc: cats.sort { (totals[$0] ?? 0) > (totals[$1] ?? 0) }
+        case .valueAsc: cats.sort { (totals[$0] ?? 0) < (totals[$1] ?? 0) }
+        case .categoryDesc: cats.sort(by: >)
+        default: cats.sort()
+        }
         var data = ChartData()
+        data.format = valueFormat(v, m)
+        data.valueTitle = vals.map(\.0.displayName).joined(separator: ", ")
+        data.categoryTitle = ax.displayName
+        if v.fmt.topN > 0 && cats.count > v.fmt.topN { cats = Array(cats.prefix(v.fmt.topN)) }
+        let limit = v.type.isPie ? 30 : (isTrend ? 1000 : 100)
         if cats.count > limit { cats = Array(cats.prefix(limit)); data.truncated = true }
 
         let seriesKeys: [GroupKey] = legendValue != nil
@@ -469,7 +491,7 @@ enum Engine {
         guard let ctx = context(for: fields.isEmpty ? [vf.field] : fields, m) else { return nil }
         guard let fn = valueFunction(vf, ctx, MeasureEvaluator(ctx: ctx, model: m)) else { return nil }
         let value = fn(ctx.rowIndices(filters), filters)
-        return (value.map { format($0, vf, m, compact: true) } ?? L("(Vide)"), vf.displayName)
+        return (value.map { format($0, vf, m, compact: true, override: v.fmt.valueFormat) } ?? L("(Vide)"), vf.displayName)
     }
 
     // MARK: Table
@@ -495,15 +517,27 @@ enum Engine {
             return false
         }
         data.totalRowCount = keys.count
-        for k in keys.prefix(limit) {
+        var computed: [(key: [GroupKey], values: [Double?])] = keys.map { k in
             let ctxFilters = filters + zip(axes, k).map { FilterSpec(field: $0.0.0, allowed: [$0.1.label], isGroup: true) }
             let rows = groups[k]!
-            data.rows.append(k.map(\.label) + vals.map { format($0.1(rows, ctxFilters), $0.0, m) })
-            data.rowKeys.append(k.first?.label ?? "")
+            return (k, vals.map { $0.1(rows, ctxFilters) })
+        }
+        if let col = v.fmt.tableSortColumn, col < axes.count + vals.count {
+            computed.sort { a, b in
+                if col < axes.count { return a.key[col] < b.key[col] }
+                return (a.values[col - axes.count] ?? -.infinity) < (b.values[col - axes.count] ?? -.infinity)
+            }
+            if v.fmt.tableSortDescending { computed.reverse() }
+        }
+        if v.fmt.topN > 0 { computed = Array(computed.prefix(v.fmt.topN)) }
+        let override = v.fmt.valueFormat
+        for c in computed.prefix(limit) {
+            data.rows.append(c.key.map(\.label) + zip(vals, c.values).map { format($0.1, $0.0.0, m, override: override) })
+            data.rowKeys.append(c.key.first?.label ?? "")
         }
         if !axes.isEmpty && !vals.isEmpty {
             data.totals = [L("Total")] + Array(repeating: "", count: axes.count - 1)
-                + vals.map { format($0.1(all, filters), $0.0, m) }
+                + vals.map { format($0.1(all, filters), $0.0, m, override: override) }
         }
         if keys.isEmpty { data.message = L("Aucune donnée pour ces filtres") }
         return data

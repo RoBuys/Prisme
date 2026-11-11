@@ -237,6 +237,57 @@ enum VisualType: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum SortMode: String, Codable, CaseIterable {
+    case auto, valueDesc, valueAsc, categoryAsc, categoryDesc
+
+    var label: String {
+        switch self {
+        case .auto: L("Automatique")
+        case .valueDesc: L("Valeur décroissante")
+        case .valueAsc: L("Valeur croissante")
+        case .categoryAsc: L("Catégorie (A → Z)")
+        case .categoryDesc: L("Catégorie (Z → A)")
+        }
+    }
+}
+
+/// Per-visual formatting options (all optional in saved files).
+struct VisualFormat: Hashable, Codable {
+    var dataLabels = false
+    var showLegend = true
+    var gridlines = true
+    var axisTitles = false
+    /// Hex color (RRGGBB) of the first series, overriding the theme.
+    var color: String?
+    var valueFormat: MeasureFormat = .auto
+    var sort: SortMode = .auto
+    /// Keep only the first N categories after sorting (0 = all).
+    var topN = 0
+    /// Table visual: column used for sorting, and its direction.
+    var tableSortColumn: Int?
+    var tableSortDescending = false
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case dataLabels, showLegend, gridlines, axisTitles, color, valueFormat, sort, topN, tableSortColumn, tableSortDescending
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dataLabels = try c.decodeIfPresent(Bool.self, forKey: .dataLabels) ?? false
+        showLegend = try c.decodeIfPresent(Bool.self, forKey: .showLegend) ?? true
+        gridlines = try c.decodeIfPresent(Bool.self, forKey: .gridlines) ?? true
+        axisTitles = try c.decodeIfPresent(Bool.self, forKey: .axisTitles) ?? false
+        color = try c.decodeIfPresent(String.self, forKey: .color)
+        valueFormat = try c.decodeIfPresent(MeasureFormat.self, forKey: .valueFormat) ?? .auto
+        sort = try c.decodeIfPresent(SortMode.self, forKey: .sort) ?? .auto
+        topN = try c.decodeIfPresent(Int.self, forKey: .topN) ?? 0
+        tableSortColumn = try c.decodeIfPresent(Int.self, forKey: .tableSortColumn)
+        tableSortDescending = try c.decodeIfPresent(Bool.self, forKey: .tableSortDescending) ?? false
+    }
+}
+
 struct Visual: Identifiable, Hashable, Codable {
     var id = UUID()
     var type: VisualType
@@ -247,6 +298,9 @@ struct Visual: Identifiable, Hashable, Codable {
     var legend: FieldRef?
     var values: [ValueField] = []
     var slicerSelection: Set<String> = []
+    var format: VisualFormat?
+
+    var fmt: VisualFormat { format ?? VisualFormat() }
 
     var autoTitle: String {
         switch type {
@@ -335,9 +389,11 @@ struct ReportDocument: Codable {
     var relationships: [Relationship] = []
     var measures: [Measure] = []
     var modelLayout: [String: CGPoint] = [:]
+    var theme: String?
 
     init(tables: [DataTable], pages: [ReportPage], relationships: [Relationship], measures: [Measure],
-         modelLayout: [String: CGPoint]) {
+         modelLayout: [String: CGPoint], theme: String?) {
+        self.theme = theme
         self.version = 3
         self.tables = tables
         self.pages = pages
@@ -346,7 +402,7 @@ struct ReportDocument: Codable {
         self.modelLayout = modelLayout
     }
 
-    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout }
+    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout, theme }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -356,5 +412,6 @@ struct ReportDocument: Codable {
         relationships = try c.decodeIfPresent([Relationship].self, forKey: .relationships) ?? []
         measures = try c.decodeIfPresent([Measure].self, forKey: .measures) ?? []
         modelLayout = try c.decodeIfPresent([String: CGPoint].self, forKey: .modelLayout) ?? [:]
+        theme = try c.decodeIfPresent(String.self, forKey: .theme)
     }
 }

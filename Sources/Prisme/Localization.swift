@@ -340,6 +340,28 @@ enum Strings {
         "Produits": "Products",
         "Régions": "Regions",
 
+        // Formatting
+        "Valeur décroissante": "Value, descending",
+        "Valeur croissante": "Value, ascending",
+        "Catégorie (A → Z)": "Category (A → Z)",
+        "Catégorie (Z → A)": "Category (Z → A)",
+        "Étiquettes de données": "Data labels",
+        "Quadrillage": "Gridlines",
+        "Titres des axes": "Axis titles",
+        "Couleur principale": "Main color",
+        "Thème": "Theme",
+        "Revenir à la couleur du thème": "Use the theme color",
+        "Format des valeurs": "Value format",
+        "Tri": "Sort",
+        "Top N : tous": "Top N: all",
+        "Top N : %@": "Top N: %@",
+        "Cliquez sur un en-tête de colonne pour trier.": "Click a column header to sort.",
+        "Thème du rapport": "Report theme",
+        "Océan": "Ocean",
+        "Forêt": "Forest",
+        "Crépuscule": "Sunset",
+        "Monochrome": "Monochrome",
+
         // Settings
         "Langue": "Language",
         "Langue de l'interface": "Interface language",

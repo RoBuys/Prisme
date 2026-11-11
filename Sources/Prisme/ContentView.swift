@@ -1,12 +1,26 @@
 import SwiftUI
 
 enum Theme {
-    static let palette: [Color] = [
-        0x2E6FD8, 0xF28C28, 0x2BA37A, 0xC2417B, 0x7E57C2, 0xE0B400, 0x4BB3D8, 0x8C6D4F, 0xD9534F, 0x5C6F82,
-    ].map { Color(hex: $0) }
+    static let defaultName = "prisme"
 
-    static func colors(_ n: Int) -> [Color] {
-        (0..<max(n, 1)).map { palette[$0 % palette.count] }
+    /// Report themes: identifier, French name (translated with L), colors.
+    static let themes: [(id: String, name: String, colors: [UInt32])] = [
+        ("prisme", "Prisme", [0x2E6FD8, 0xF28C28, 0x2BA37A, 0xC2417B, 0x7E57C2, 0xE0B400, 0x4BB3D8, 0x8C6D4F, 0xD9534F, 0x5C6F82]),
+        ("ocean", "Océan", [0x0B4F6C, 0x01BAEF, 0x20BF55, 0x757575, 0x2E86AB, 0x00A6A6, 0x5DD9C1, 0x1B998B, 0x3D5A80, 0x98C1D9]),
+        ("forest", "Forêt", [0x2D6A4F, 0x95D5B2, 0x8C6D4F, 0xD4A373, 0x40916C, 0xB7E4C7, 0x6B4226, 0xCCD5AE, 0x52796F, 0xE9C46A]),
+        ("sunset", "Crépuscule", [0xE76F51, 0xF4A261, 0xE9C46A, 0x2A9D8F, 0x264653, 0xD62828, 0xF77F00, 0xFCBF49, 0x9B5DE5, 0xF15BB5]),
+        ("mono", "Monochrome", [0x1F2937, 0x4B5563, 0x6B7280, 0x9CA3AF, 0xD1D5DB, 0x374151, 0x111827, 0x7C8594, 0xB0B7C3, 0xE5E7EB]),
+    ]
+
+    static var palette: [Color] {
+        let id = AppState.shared.theme
+        return (themes.first { $0.id == id } ?? themes[0]).colors.map { Color(hex: $0) }
+    }
+
+    static func colors(_ n: Int, first: String? = nil) -> [Color] {
+        var p = palette
+        if let first, let c = Color(hexString: first) { p[0] = c }
+        return (0..<max(n, 1)).map { p[$0 % p.count] }
     }
 
     static let accent = Color(hex: 0x2E6FD8)
@@ -16,6 +30,24 @@ extension Color {
     init(hex: UInt32) {
         self.init(.sRGB, red: Double((hex >> 16) & 0xFF) / 255, green: Double((hex >> 8) & 0xFF) / 255,
                   blue: Double(hex & 0xFF) / 255)
+    }
+
+    init?(hexString: String) {
+        guard let v = UInt32(hexString.trimmingCharacters(in: CharacterSet(charactersIn: "#")), radix: 16) else { return nil }
+        self.init(hex: v)
+    }
+
+    /// "RRGGBB" in sRGB.
+    var hexString: String {
+        let c = NSColor(self).usingColorSpace(.sRGB) ?? .black
+        return String(format: "%02X%02X%02X", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255))
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func applyIf<V: View>(_ condition: Bool, _ transform: (Self) -> V) -> some View {
+        if condition { transform(self) } else { self }
     }
 }
 

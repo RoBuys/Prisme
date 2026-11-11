@@ -53,6 +53,8 @@ struct VisualizationsPane: View {
                         Text(L("Sélectionnez un visuel sur la page pour modifier ses champs, ou cliquez sur un type ci-dessus pour en créer un."))
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
+                        Divider()
+                        themePicker
                     }
                 }
                 .padding(.horizontal, 12)
@@ -204,14 +206,96 @@ struct VisualizationsPane: View {
                 set: { val in state.mutateVisual(v.id) { $0.showTitle = val } }))
                 .toggleStyle(.switch)
                 .controlSize(.small)
+                .font(.system(size: 11))
             TextField(v.autoTitle, text: Binding(
                 get: { v.title },
                 set: { val in state.mutateVisual(v.id) { $0.title = val } }))
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11))
+            visualOptions(v)
             Text(L("Taille : %@ × %@  ·  Position : %@, %@", Int(v.frame.width), Int(v.frame.height), Int(v.frame.minX), Int(v.frame.minY)))
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func toggle(_ title: String, _ v: Visual, _ key: WritableKeyPath<VisualFormat, Bool>) -> some View {
+        Toggle(title, isOn: Binding(get: { v.fmt[keyPath: key] },
+                                    set: { val in state.mutateFormat(v.id) { $0[keyPath: key] = val } }))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .font(.system(size: 11))
+    }
+
+    @ViewBuilder
+    private func visualOptions(_ v: Visual) -> some View {
+        let f = v.fmt
+        if v.type.isCartesian || v.type.isPie {
+            toggle(L("Étiquettes de données"), v, \.dataLabels)
+            toggle(L("Légende"), v, \.showLegend)
+        }
+        if v.type.isCartesian {
+            toggle(L("Quadrillage"), v, \.gridlines)
+            toggle(L("Titres des axes"), v, \.axisTitles)
+        }
+        if v.type.isCartesian || v.type.isPie {
+            HStack {
+                ColorPicker(L("Couleur principale"), selection: Binding(
+                    get: { f.color.flatMap(Color.init(hexString:)) ?? Theme.palette[0] },
+                    set: { c in state.mutateFormat(v.id) { $0.color = c.hexString } }), supportsOpacity: false)
+                    .font(.system(size: 11))
+                if f.color != nil {
+                    Button(L("Thème")) { state.mutateFormat(v.id) { $0.color = nil } }
+                        .controlSize(.small).help(L("Revenir à la couleur du thème"))
+                }
+            }
+        }
+        if v.type != .slicer {
+            Picker(L("Format des valeurs"), selection: Binding(get: { f.valueFormat },
+                                                             set: { val in state.mutateFormat(v.id) { $0.valueFormat = val } })) {
+                ForEach(MeasureFormat.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            .font(.system(size: 11))
+        }
+        if v.type.isCartesian || v.type.isPie {
+            Picker(L("Tri"), selection: Binding(get: { f.sort }, set: { val in state.mutateFormat(v.id) { $0.sort = val } })) {
+                ForEach(SortMode.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            .font(.system(size: 11))
+        }
+        if v.type.isCartesian || v.type.isPie || v.type == .table {
+            Stepper(value: Binding(get: { f.topN }, set: { val in state.mutateFormat(v.id) { $0.topN = max(0, val) } }),
+                    in: 0...100) {
+                Text(f.topN == 0 ? L("Top N : tous") : L("Top N : %@", f.topN)).font(.system(size: 11))
+            }
+            .controlSize(.small)
+        }
+        if v.type == .table {
+            Text(L("Cliquez sur un en-tête de colonne pour trier.")).font(.system(size: 10)).foregroundStyle(.tertiary)
+        }
+    }
+
+    private var themePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L("Thème du rapport")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            ForEach(Theme.themes, id: \.id) { t in
+                Button {
+                    state.theme = t.id
+                    state.didChange()
+                } label: {
+                    HStack(spacing: 6) {
+                        HStack(spacing: 1) {
+                            ForEach(0..<6, id: \.self) { i in Rectangle().fill(Color(hex: t.colors[i])).frame(width: 12, height: 14) }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        Text(L(t.name)).font(.system(size: 11))
+                        Spacer()
+                        if state.theme == t.id { Image(systemName: "checkmark").foregroundStyle(Theme.accent) }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 }

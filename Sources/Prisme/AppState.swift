@@ -30,6 +30,8 @@ final class AppState {
     /// The measure being created or edited (drives the editor sheet).
     var measureDraft: MeasureDraft?
     var modelLayout: [String: CGPoint] = [:]
+    /// Report color theme (see `Theme.themes`).
+    var theme = Theme.defaultName
     var pages: [ReportPage]
     var currentPageID: UUID
     var selectedVisualID: UUID?
@@ -47,6 +49,7 @@ final class AppState {
         var relationships: [Relationship]
         var measures: [Measure]
         var modelLayout: [String: CGPoint]
+        var theme: String
         var currentPageID: UUID
     }
 
@@ -59,7 +62,7 @@ final class AppState {
 
     private func snapshot() -> Snapshot {
         Snapshot(tables: tables, pages: pages, relationships: relationships, measures: measures,
-                 modelLayout: modelLayout, currentPageID: currentPageID)
+                 modelLayout: modelLayout, theme: theme, currentPageID: currentPageID)
     }
 
     /// Records a change for undo and marks the document as modified.
@@ -101,6 +104,7 @@ final class AppState {
         relationships = s.relationships
         measures = s.measures
         modelLayout = s.modelLayout
+        theme = s.theme
         currentPageID = pages.contains { $0.id == s.currentPageID } ? s.currentPageID : pages[0].id
         if let id = selectedVisualID, visual(id) == nil { selectedVisualID = nil }
         crossFilter = nil
@@ -238,6 +242,14 @@ final class AppState {
             }
         } else {
             addVisual(type)
+        }
+    }
+
+    func mutateFormat(_ id: UUID, _ body: (inout VisualFormat) -> Void) {
+        mutateVisual(id) { v in
+            var f = v.fmt
+            body(&f)
+            v.format = f
         }
     }
 
@@ -795,6 +807,7 @@ final class AppState {
         tables = []
         relationships = []
         measures = []
+        theme = Theme.defaultName
         modelLayout = [:]
         pages = [p]
         currentPageID = p.id
@@ -823,6 +836,7 @@ final class AppState {
             relationships = doc.relationships
             measures = doc.measures
             modelLayout = doc.modelLayout
+            theme = doc.theme ?? Theme.defaultName
             pages = doc.pages.isEmpty ? [ReportPage(name: L("Page 1"))] : doc.pages
             currentPageID = pages[0].id
             selectedVisualID = nil
@@ -854,7 +868,7 @@ final class AppState {
 
     private func write(to url: URL) -> Bool {
         do {
-            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout))
+            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout, theme: theme))
             try data.write(to: url, options: .atomic)
             fileURL = url
             isDirty = false

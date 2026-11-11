@@ -25,15 +25,20 @@ struct VisualContentView: View {
         switch visual.type {
         case .column, .bar, .line, .area:
             CartesianChartView(data: Engine.chartData(visual, state.model, filters), type: visual.type,
-                               selected: selected, onSelect: onSelect)
+                               format: visual.fmt, selected: selected, onSelect: onSelect)
         case .pie, .donut:
             PieChartView(data: Engine.chartData(visual, state.model, filters), donut: visual.type == .donut,
-                         selected: selected, onSelect: onSelect)
+                         format: visual.fmt, selected: selected, onSelect: onSelect)
         case .card:
             CardVisualView(result: Engine.cardValue(visual, state.model, filters),
                            title: visual.showTitle && !visual.title.isEmpty ? visual.title : nil)
         case .table:
-            TableVisualView(data: Engine.tableData(visual, state.model, filters), selected: selected, onSelect: onSelect)
+            TableVisualView(data: Engine.tableData(visual, state.model, filters), selected: selected, onSelect: onSelect,
+                            sortColumn: visual.fmt.tableSortColumn, sortDescending: visual.fmt.tableSortDescending) { col in
+                state.mutateFormat(visual.id) { f in
+                    if f.tableSortColumn == col { f.tableSortDescending.toggle() } else { f.tableSortColumn = col; f.tableSortDescending = col > 0 }
+                }
+            }
         case .slicer:
             SlicerView(visual: visual)
         }
@@ -55,11 +60,38 @@ struct PlaceholderView: View {
 
 // MARK: - Column / bar / line / area
 
+/// Hover tooltip listing the values of one category.
+struct ChartTooltip: View {
+    let title: String
+    let rows: [(name: String, value: String, color: Color)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.system(size: 11, weight: .semibold))
+            ForEach(rows.indices, id: \.self) { i in
+                HStack(spacing: 5) {
+                    Circle().fill(rows[i].color).frame(width: 7, height: 7)
+                    Text(rows[i].name).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(rows[i].value).font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                }
+            }
+        }
+        .padding(7)
+        .frame(maxWidth: 220)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white).shadow(color: .black.opacity(0.18), radius: 4, y: 1))
+        .foregroundStyle(Color(hex: 0x252A33))
+        .fixedSize()
+    }
+}
+
 struct CartesianChartView: View {
     let data: ChartData
     let type: VisualType
+    let format: VisualFormat
     let selected: String?
     let onSelect: (String?) -> Void
+    @State private var hover: (category: String, location: CGPoint)?
 
     var body: some View {
         if let m = data.message {
@@ -68,6 +100,7 @@ struct CartesianChartView: View {
             base
                 .chartXAxis { valueAxis(.bottom) }
                 .chartYScale(domain: data.categories)
+                .applyIf(format.axisTitles) { $0.chartXAxisLabel(data.valueTitle).chartYAxisLabel(data.categoryTitle) }
         } else {
             base
                 .chartYAxis { valueAxis(.leading) }
@@ -77,56 +110,98 @@ struct CartesianChartView: View {
                     }
                 }
                 .chartXScale(domain: data.categories)
+                .applyIf(format.axisTitles) { $0.chartXAxisLabel(data.categoryTitle).chartYAxisLabel(data.valueTitle) }
         }
     }
 
+    private var colors: [Color] { Theme.colors(data.series.count, first: format.color) }
+
     private func opacity(_ p: ChartPoint) -> Double {
-        selected == nil || selected == p.category ? 1 : 0.3
+        if let s = selected { return s == p.category ? 1 : 0.3 }
+        if let h = hover?.category, type != .line && type != .area { return h == p.category ? 1 : 0.75 }
+        return 1
     }
+
+    private func label(_ v: Double) -> String { Fmt.measure(v, data.format, compact: true) }
 
     private var base: some View {
         Chart(data.points) { p in
             if type == .bar {
-                BarMark(x: .value("Valeur", p.value), y: .value("Catégorie", p.category))
-                    .foregroundStyle(by: .value("Série", p.series))
-                    .position(by: .value("Série", p.series))
+                BarMark(x: .value("v", p.value), y: .value("c", p.category))
+                    .foregroundStyle(by: .value("s", p.series))
+                    .position(by: .value("s", p.series))
                     .opacity(opacity(p))
+                    .annotation(position: .trailing, spacing: 2) {
+                        if format.dataLabels { Text(label(p.value)).font(.system(size: 9)).foregroundStyle(.secondary) }
+                    }
             } else if type == .line {
-                LineMark(x: .value("Catégorie", p.category), y: .value("Valeur", p.value))
-                    .foregroundStyle(by: .value("Série", p.series))
+                LineMark(x: .value("c", p.category), y: .value("v", p.value))
+                    .foregroundStyle(by: .value("s", p.series))
                     .interpolationMethod(.monotone)
-                PointMark(x: .value("Catégorie", p.category), y: .value("Valeur", p.value))
-                    .foregroundStyle(by: .value("Série", p.series))
-                    .symbolSize(selected == p.category ? 60 : 14)
+                PointMark(x: .value("c", p.category), y: .value("v", p.value))
+                    .foregroundStyle(by: .value("s", p.series))
+                    .symbolSize(selected == p.category || hover?.category == p.category ? 60 : 14)
+                    .annotation(position: .top, spacing: 2) {
+                        if format.dataLabels { Text(label(p.value)).font(.system(size: 9)).foregroundStyle(.secondary) }
+                    }
             } else if type == .area {
-                AreaMark(x: .value("Catégorie", p.category), y: .value("Valeur", p.value))
-                    .foregroundStyle(by: .value("Série", p.series))
+                AreaMark(x: .value("c", p.category), y: .value("v", p.value))
+                    .foregroundStyle(by: .value("s", p.series))
                     .interpolationMethod(.monotone)
                     .opacity(0.75)
             } else {
-                BarMark(x: .value("Catégorie", p.category), y: .value("Valeur", p.value))
-                    .foregroundStyle(by: .value("Série", p.series))
-                    .position(by: .value("Série", p.series))
+                BarMark(x: .value("c", p.category), y: .value("v", p.value))
+                    .foregroundStyle(by: .value("s", p.series))
+                    .position(by: .value("s", p.series))
                     .opacity(opacity(p))
+                    .annotation(position: .top, spacing: 2) {
+                        if format.dataLabels { Text(label(p.value)).font(.system(size: 9)).foregroundStyle(.secondary) }
+                    }
+            }
+            if let h = hover?.category, h == p.category, type == .line || type == .area {
+                RuleMark(x: .value("c", h)).foregroundStyle(Color.gray.opacity(0.35)).lineStyle(StrokeStyle(lineWidth: 1))
             }
         }
-        .chartForegroundStyleScale(domain: data.series, range: Theme.colors(data.series.count))
-        .chartLegend(data.series.count > 1 ? .visible : .hidden)
+        .chartForegroundStyleScale(domain: data.series, range: colors)
+        .chartLegend(format.showLegend && data.series.count > 1 ? .visible : .hidden)
         .chartLegend(position: .top, alignment: .leading)
         .chartOverlay { proxy in
             GeometryReader { geo in
                 Rectangle().fill(.clear).contentShape(Rectangle())
-                    .onTapGesture { loc in
-                        guard let pf = proxy.plotFrame else { onSelect(nil); return }
-                        let frame = geo[pf]
-                        guard frame.contains(loc) else { onSelect(nil); return }
-                        let cat: String? = type == .bar
-                            ? proxy.value(atY: loc.y - frame.minY, as: String.self)
-                            : proxy.value(atX: loc.x - frame.minX, as: String.self)
-                        onSelect(cat)
+                    .onTapGesture { loc in onSelect(category(at: loc, proxy, geo)) }
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let loc):
+                            if let c = category(at: loc, proxy, geo) { hover = (c, loc) } else { hover = nil }
+                        case .ended: hover = nil
+                        }
                     }
+                if let h = hover {
+                    tooltip(h.category)
+                        .position(x: min(max(h.location.x + 70, 80), geo.size.width - 80),
+                                  y: min(max(h.location.y - 30, 30), geo.size.height - 30))
+                        .allowsHitTesting(false)
+                }
             }
         }
+    }
+
+    private func category(at loc: CGPoint, _ proxy: ChartProxy, _ geo: GeometryProxy) -> String? {
+        guard let pf = proxy.plotFrame else { return nil }
+        let frame = geo[pf]
+        guard frame.contains(loc) else { return nil }
+        return type == .bar
+            ? proxy.value(atY: loc.y - frame.minY, as: String.self)
+            : proxy.value(atX: loc.x - frame.minX, as: String.self)
+    }
+
+    private func tooltip(_ category: String) -> some View {
+        let pts = data.points.filter { $0.category == category }
+        let rows = pts.map { p in
+            (name: p.series, value: Fmt.measure(p.value, data.format, compact: false),
+             color: colors[(data.series.firstIndex(of: p.series) ?? 0) % max(colors.count, 1)])
+        }
+        return ChartTooltip(title: category, rows: rows)
     }
 
     /// At most ~10 labels on a category axis so they stay readable.
@@ -139,9 +214,9 @@ struct CartesianChartView: View {
 
     private func valueAxis(_ position: AxisMarkPosition) -> some AxisContent {
         AxisMarks(position: position) { v in
-            AxisGridLine()
+            if format.gridlines { AxisGridLine() }
             AxisValueLabel {
-                if let d = v.as(Double.self) { Text(Fmt.compact(d)) }
+                if let d = v.as(Double.self) { Text(Fmt.measure(d, data.format == .percent ? .percent : .auto, compact: true)) }
             }
         }
     }
@@ -152,20 +227,31 @@ struct CartesianChartView: View {
 struct PieChartView: View {
     let data: ChartData
     let donut: Bool
+    let format: VisualFormat
     let selected: String?
     let onSelect: (String?) -> Void
+    @State private var hover: (category: String, location: CGPoint)?
 
     var body: some View {
         if let m = data.message {
             PlaceholderView(message: m, symbol: donut ? "circle.circle" : "chart.pie.fill")
         } else {
             let total = data.points.reduce(0) { $0 + $1.value }
+            let colors = Theme.colors(data.categories.count, first: format.color)
             Chart(data.points) { p in
-                SectorMark(angle: .value("Valeur", p.value), innerRadius: .ratio(donut ? 0.58 : 0), angularInset: 1)
-                    .foregroundStyle(by: .value("Catégorie", p.category))
-                    .opacity(selected == nil || selected == p.category ? 1 : 0.3)
+                SectorMark(angle: .value("v", p.value), innerRadius: .ratio(donut ? 0.58 : 0), angularInset: 1)
+                    .foregroundStyle(by: .value("c", p.category))
+                    .opacity(selected == nil ? (hover == nil || hover?.category == p.category ? 1 : 0.7)
+                             : (selected == p.category ? 1 : 0.3))
+                    .annotation(position: .overlay) {
+                        if format.dataLabels && total > 0 && p.value / total >= 0.04 {
+                            Text((p.value / total).formatted(.percent.precision(.fractionLength(0))))
+                                .font(.system(size: 9, weight: .semibold)).foregroundStyle(.white)
+                        }
+                    }
             }
-            .chartForegroundStyleScale(domain: data.categories, range: Theme.colors(data.categories.count))
+            .chartForegroundStyleScale(domain: data.categories, range: colors)
+            .chartLegend(format.showLegend ? .visible : .hidden)
             .chartLegend(position: .trailing, alignment: .center)
             .chartBackground { proxy in
                 if donut {
@@ -173,7 +259,7 @@ struct PieChartView: View {
                         if let pf = proxy.plotFrame {
                             let frame = geo[pf]
                             VStack(spacing: 0) {
-                                Text(Fmt.compact(total)).font(.system(size: 17, weight: .semibold))
+                                Text(Fmt.measure(total, data.format, compact: true)).font(.system(size: 17, weight: .semibold))
                                 Text(L("Total")).font(.system(size: 10)).foregroundStyle(.secondary)
                             }
                             .position(x: frame.midX, y: frame.midY)
@@ -184,23 +270,45 @@ struct PieChartView: View {
             .chartOverlay { proxy in
                 GeometryReader { geo in
                     Rectangle().fill(.clear).contentShape(Rectangle())
-                        .onTapGesture { loc in
-                            guard let pf = proxy.plotFrame, total > 0 else { onSelect(nil); return }
-                            let frame = geo[pf]
-                            let dx = loc.x - frame.midX, dy = loc.y - frame.midY
-                            guard hypot(dx, dy) <= min(frame.width, frame.height) / 2 else { onSelect(nil); return }
-                            var angle = atan2(dx, -dy)
-                            if angle < 0 { angle += 2 * .pi }
-                            var acc = 0.0
-                            for p in data.points {
-                                acc += p.value / total * 2 * .pi
-                                if Double(angle) <= acc { onSelect(p.category); return }
+                        .onTapGesture { loc in onSelect(category(at: loc, proxy, geo, total)) }
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let loc):
+                                if let c = category(at: loc, proxy, geo, total) { hover = (c, loc) } else { hover = nil }
+                            case .ended: hover = nil
                             }
-                            onSelect(nil)
                         }
+                    if let h = hover, let p = data.points.first(where: { $0.category == h.category }) {
+                        let share = total > 0 ? p.value / total : 0
+                        ChartTooltip(title: h.category, rows: [
+                            (name: p.series, value: Fmt.measure(p.value, data.format, compact: false),
+                             color: colors[(data.categories.firstIndex(of: p.category) ?? 0) % colors.count]),
+                            (name: "%", value: share.formatted(.percent.precision(.fractionLength(1))), color: .clear),
+                        ])
+                        .position(x: min(max(h.location.x + 70, 80), geo.size.width - 80),
+                                  y: min(max(h.location.y - 30, 30), geo.size.height - 30))
+                        .allowsHitTesting(false)
+                    }
                 }
             }
         }
+    }
+
+    private func category(at loc: CGPoint, _ proxy: ChartProxy, _ geo: GeometryProxy, _ total: Double) -> String? {
+        guard let pf = proxy.plotFrame, total > 0 else { return nil }
+        let frame = geo[pf]
+        let dx = loc.x - frame.midX, dy = loc.y - frame.midY
+        let r = min(frame.width, frame.height) / 2
+        let d = hypot(dx, dy)
+        guard d <= r, !donut || d >= r * 0.58 else { return nil }
+        var angle = atan2(dx, -dy)
+        if angle < 0 { angle += 2 * .pi }
+        var acc = 0.0
+        for p in data.points {
+            acc += p.value / total * 2 * .pi
+            if Double(angle) <= acc { return p.category }
+        }
+        return nil
     }
 }
 
@@ -236,6 +344,9 @@ struct TableVisualView: View {
     let data: TableData
     let selected: String?
     let onSelect: (String?) -> Void
+    var sortColumn: Int?
+    var sortDescending = false
+    var onSort: (Int) -> Void = { _ in }
 
     var body: some View {
         if let m = data.message {
@@ -259,7 +370,7 @@ struct TableVisualView: View {
                                 .font(.system(size: 10)).foregroundStyle(.secondary).padding(6)
                         }
                     } header: {
-                        row(data.headers, widths: widths, bold: true)
+                        header(widths)
                             .background(Color.white)
                             .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.15)).frame(height: 1) }
                     } footer: {
@@ -279,8 +390,29 @@ struct TableVisualView: View {
             var longest = data.headers[c].count
             for r in data.rows.prefix(200) { longest = max(longest, r[c].count) }
             if let t = data.totals { longest = max(longest, t[c].count) }
-            return min(260, max(60, CGFloat(longest) * 6.8 + 16))
+            return min(260, max(60, CGFloat(longest) * 6.8 + 24))
         }
+    }
+
+    private func header(_ widths: [CGFloat]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(data.headers.indices, id: \.self) { c in
+                HStack(spacing: 2) {
+                    if data.numeric[c] { Spacer(minLength: 0) }
+                    Text(data.headers[c]).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                    if sortColumn == c {
+                        Image(systemName: sortDescending ? "chevron.down" : "chevron.up").font(.system(size: 8, weight: .bold))
+                    }
+                    if !data.numeric[c] { Spacer(minLength: 0) }
+                }
+                .frame(width: widths[c])
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+                .onTapGesture { onSort(c) }
+            }
+        }
+        .padding(.vertical, 4)
+        .foregroundStyle(Color(hex: 0x252A33))
     }
 
     private func row(_ cells: [String], widths: [CGFloat], bold: Bool) -> some View {
