@@ -1,0 +1,3 @@
+relationship 1a2b
+	fromColumn: Ventes.'Région'
+	toColumn: 'Régions'.'Région'

@@ -5,6 +5,8 @@ let package = Package(
     name: "Prisme",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Prisme", path: "Sources/Prisme")
+        .executableTarget(name: "Prisme", path: "Sources/Prisme"),
+        .testTarget(name: "PrismeTests", dependencies: ["Prisme"], path: "Tests/PrismeTests",
+                    resources: [.copy("Fixtures")]),
     ]
 )

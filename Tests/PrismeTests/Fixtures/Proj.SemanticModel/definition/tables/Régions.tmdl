@@ -1,0 +1,15 @@
+table 'Régions'
+
+	column 'Région'
+		dataType: string
+		sourceColumn: Région
+
+	column Zone
+		dataType: string
+		sourceColumn: Zone
+
+	partition R = m
+		mode: import
+		source = ```
+			let Source = Csv.Document(File.Contents("regions.csv"),[Delimiter=","]), P = Table.PromoteHeaders(Source) in P
+			```

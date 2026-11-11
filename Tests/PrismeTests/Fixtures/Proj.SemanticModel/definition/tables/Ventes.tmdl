@@ -1,0 +1,39 @@
+table Ventes
+	lineageTag: abc
+
+	measure 'Chiffre d''affaires' = SUM(Ventes[Montant])
+		formatString: #,0 €
+
+	measure Marge =
+			VAR x = [Chiffre d'affaires]
+			RETURN x * 0.3
+		formatString: 0.0
+
+	column Date
+		dataType: dateTime
+		sourceColumn: Date
+
+	column 'Région'
+		dataType: string
+		sourceColumn: Région
+
+	column Canal
+		dataType: string
+		sourceColumn: Canal
+
+	column Montant
+		dataType: double
+		sourceColumn: Montant
+
+	column 'Grosse vente' = IF(Ventes[Montant] > 200, "Oui", "Non")
+		dataType: string
+
+	partition Ventes = m
+		mode: import
+		source =
+				let
+				    Source = Csv.Document(File.Contents("C:\\Data\\ventes.csv"),[Delimiter=";"]),
+				    P = Table.PromoteHeaders(Source)
+				in
+				    P
+

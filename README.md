@@ -88,6 +88,16 @@ open Prisme.app
 Requires the Command Line Tools (Swift 6) and macOS 14+. The script builds against the macOS 26.5 SDK because,
 without a full Xcode, the SwiftUI macros of the macOS 27 SDK are not available.
 
+Tests (Swift Testing — importers, query engine, DAX, transformations, documents, undo, Power BI import,
+translations):
+
+```bash
+./test.sh
+```
+
+The Power BI fixtures in `Tests/PrismeTests/Fixtures` are synthetic files written from Microsoft's format
+documentation.
+
 Development options:
 
 - `Prisme --inspect file.csv`: prints how a file is imported, then quits.
