@@ -112,6 +112,8 @@ enum PBITExporter {
             var d: [String: Any] = ["name": UUID().uuidString.lowercased(), "fromTable": r.fromTable, "fromColumn": r.fromColumn,
                                     "toTable": r.toTable, "toColumn": r.toColumn]
             if !r.isActive { d["isActive"] = false }
+            if r.crossBoth { d["crossFilteringBehavior"] = "bothDirections" }
+            if r.isManyToMany { d["fromCardinality"] = "many"; d["toCardinality"] = "many" }
             return d
         }
         return [

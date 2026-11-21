@@ -235,8 +235,8 @@ struct RelationshipsPane: View {
                     Text("\(r.fromTable)[\(r.fromColumn)]").font(.system(size: 11, weight: .semibold))
                     HStack(spacing: 3) {
                         Text("*").bold()
-                        Image(systemName: "arrow.right").font(.system(size: 9))
-                        Text("1").bold()
+                        Image(systemName: r.crossBoth ? "arrow.left.arrow.right" : "arrow.right").font(.system(size: 9))
+                        Text(r.isManyToMany ? "*" : "1").bold()
                     }
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     Text("\(r.toTable)[\(r.toColumn)]").font(.system(size: 11, weight: .semibold))
@@ -247,6 +247,14 @@ struct RelationshipsPane: View {
             }
             Toggle(L("Active"), isOn: Binding(get: { r.isActive }, set: { state.setRelationshipActive(r.id, $0) }))
                 .toggleStyle(.switch).controlSize(.mini).font(.system(size: 11))
+            Toggle(L("Filtrage dans les deux sens"), isOn: Binding(get: { r.crossBoth }, set: { v in
+                state.mutateRelationship(r.id) { $0.bothDirections = v ? true : nil }
+            }))
+            .toggleStyle(.switch).controlSize(.mini).font(.system(size: 11))
+            Toggle(L("Plusieurs à plusieurs"), isOn: Binding(get: { r.isManyToMany }, set: { v in
+                state.mutateRelationship(r.id) { $0.manyToMany = v ? true : nil }
+            }))
+            .toggleStyle(.switch).controlSize(.mini).font(.system(size: 11))
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 6).fill(r.isActive ? Theme.accent.opacity(0.08) : Color.primary.opacity(0.04)))

@@ -1042,6 +1042,13 @@ final class AppState {
         didChange()
     }
 
+    func mutateRelationship(_ id: UUID, _ body: (inout Relationship) -> Void) {
+        guard let i = relationships.firstIndex(where: { $0.id == id }) else { return }
+        body(&relationships[i])
+        crossFilter = nil
+        didChange()
+    }
+
     func setRelationshipActive(_ id: UUID, _ active: Bool) {
         guard let i = relationships.firstIndex(where: { $0.id == id }) else { return }
         if active {

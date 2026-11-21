@@ -72,6 +72,7 @@ struct PBIRelSpec {
     var fromTable: String, fromColumn: String, toTable: String, toColumn: String
     var active = true
     var bothDirections = false
+    var manyToMany = false
 }
 
 struct PBIProject {
@@ -377,7 +378,10 @@ enum PowerBIImporter {
                   !isAutoDateTable(ft), !isAutoDateTable(tt) else { continue }
             rels.append(PBIRelSpec(fromTable: ft, fromColumn: fc, toTable: tt, toColumn: tc,
                                    active: (r["isActive"] as? Bool) ?? true,
-                                   bothDirections: (r["crossFilteringBehavior"] as? String) == "bothDirections"))
+                                   bothDirections: (r["crossFilteringBehavior"] as? String) == "bothDirections"
+                                    // One-to-one relationships filter both ways in Power BI.
+                                    || ((r["fromCardinality"] as? String) == "one" && (r["toCardinality"] as? String ?? "one") == "one"),
+                                   manyToMany: (r["toCardinality"] as? String) == "many"))
         }
         return (tables, rels)
     }
@@ -516,6 +520,7 @@ enum PowerBIImporter {
                     case "tocolumn": if let q = tmdlQualified(kv[1]) { rels[r].toTable = q.0; rels[r].toColumn = q.1 }
                     case "isactive": rels[r].active = kv.count < 2 || kv[1].lowercased() != "false"
                     case "crossfilteringbehavior": rels[r].bothDirections = kv.count > 1 && kv[1].lowercased() == "bothdirections"
+                    case "tocardinality": rels[r].manyToMany = kv.count > 1 && kv[1].lowercased() == "many"
                     default: break
                     }
                     continue
@@ -1296,13 +1301,12 @@ extension AppState {
             } } }
             if !seen.isEmpty { notes.append(L("%@ mesure(s) créées vides (BLANK()) : saisissez leur formule DAX.", seen.count)) }
         }
-        var bidirectional: [String] = []
         for r in project.relationships {
             guard let ft = Engine.table(named: r.fromTable, in: tables), ft.columnIndex(r.fromColumn) != nil,
                   let tt = Engine.table(named: r.toTable, in: tables), tt.columnIndex(r.toColumn) != nil else { continue }
             relationships.append(Relationship(fromTable: r.fromTable, fromColumn: r.fromColumn, toTable: r.toTable,
-                                              toColumn: r.toColumn, isActive: r.active))
-            if r.bothDirections { bidirectional.append("\(r.fromTable) → \(r.toTable)") }
+                                              toColumn: r.toColumn, isActive: r.active,
+                                              bothDirections: r.bothDirections ? true : nil, manyToMany: r.manyToMany ? true : nil))
         }
         let list: ([String]) -> String = { $0.map { "« \($0) »" }.joined(separator: ", ") }
         for (connector, names) in unsupported.sorted(by: { $0.key < $1.key }) {
@@ -1315,9 +1319,7 @@ extension AppState {
         }
         if !missingFiles.isEmpty { notes.append(L("Fichier source introuvable, tables vides : %@.", list(missingFiles))) }
         if !parameterTables.isEmpty { notes.append(L("Paramètres sans valeur : %@.", list(parameterTables))) }
-        if !bidirectional.isEmpty {
-            notes.append(L("Filtrage bidirectionnel non pris en charge, sens unique conservé : %@.", bidirectional.joined(separator: ", ")))
-        }
+
         for (name, expr) in calculatedTables { _ = fillCalculatedTable(name, expr) }
         recomputeCalculatedColumns()
         for (name, expr) in calculatedTables where (Engine.table(named: name, in: tables)?.rows.isEmpty ?? false)

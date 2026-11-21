@@ -123,10 +123,13 @@ enum PBIXDataModel {
             else if r[1] == "4", specs[r[0]]?.mExpression == nil, !r[2].isEmpty { specs[r[0]]?.mExpression = r[2] }
         }
         var rels: [PBIRelSpec] = []
-        for r in try rows(path, "SELECT FromColumnID, ToColumnID, IsActive, CrossFilteringBehavior FROM Relationship") {
+        // Cardinality: 1 = one, 2 = many (columns missing in very old models).
+        let withCardinality = (try? rows(path, "SELECT FromColumnID, ToColumnID, IsActive, CrossFilteringBehavior, FromCardinality, ToCardinality FROM Relationship"))
+        for r in try withCardinality ?? rows(path, "SELECT FromColumnID, ToColumnID, IsActive, CrossFilteringBehavior FROM Relationship") {
             guard let f = columnNames[r[0]], let t = columnNames[r[1]] else { continue }
+            let fromOne = r.count > 4 && r[4] == "1", toMany = r.count > 5 && r[5] == "2"
             rels.append(PBIRelSpec(fromTable: f.0, fromColumn: f.1, toTable: t.0, toColumn: t.1,
-                                   active: r[2] != "0", bothDirections: r[3] == "2"))
+                                   active: r[2] != "0", bothDirections: r[3] == "2" || (fromOne && !toMany), manyToMany: toMany))
         }
         return (order.compactMap { specs[$0] }, rels)
     }

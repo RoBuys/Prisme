@@ -231,8 +231,31 @@ struct DataModel {
     }
 
     /// Active many→one relationships leaving a table.
+    /// Many-to-one relationships leaving `t` (many-to-many ones aren't followed row by row).
     func outgoing(_ t: String) -> [Relationship] {
-        relationships.filter { $0.isActive && $0.fromTable == t && $0.toTable != t }
+        relationships.filter { $0.isActive && $0.fromTable == t && $0.toTable != t && !$0.isManyToMany }
+    }
+
+    /// Tables a filter on `start` flows to, with the relationship used: from the "one" side to the "many" side,
+    /// and the other way too for relationships filtering both ways (breadth-first, shortest paths).
+    func filterFlow(from start: String) -> [String: (previous: String, via: Relationship)] {
+        var out: [String: (String, Relationship)] = [:]
+        var seen: Set<String> = [start]
+        var queue = [start]
+        var i = 0
+        while i < queue.count {
+            let t = queue[i]
+            i += 1
+            for r in relationships where r.isActive && r.fromTable != r.toTable {
+                var next: String?
+                if r.toTable == t { next = r.fromTable }                    // one → many
+                else if r.fromTable == t && r.crossBoth { next = r.toTable }   // many → one, both directions
+                guard let n = next, seen.insert(n).inserted else { continue }
+                out[n] = (t, r)
+                queue.append(n)
+            }
+        }
+        return out
     }
 
     /// Tables reachable from `start` by following many→one relationships, in breadth-first order.
@@ -284,6 +307,8 @@ struct QueryContext {
     /// For each related table: base row index → row index in that table (nil when unmatched).
     private var maps: [String: [Int?]] = [:]
     private var rowCount = 0
+    /// Filters propagated through both-way and many-to-many relationships, by filter (shared by copies).
+    private let propagated = PropagationCache()
 
     init(base: DataTable, model: DataModel) {
         self.base = base
@@ -344,10 +369,77 @@ struct QueryContext {
 
     func reaches(_ table: String) -> Bool { table == base.name || maps[table] != nil }
 
+    // MARK: Filters through both-way and many-to-many relationships
+
+    /// Join value of a key cell (same-type values compare as values; text ignores case and spaces).
+    private enum JoinValue: Hashable { case n(Double), t(String), d(Int) }
+
+    private static func joinValue(_ c: CellValue) -> JoinValue? {
+        switch c {
+        case .empty: return nil
+        case .number(let d): return .n(d)
+        case .date(let d): return .d(Int((d.timeIntervalSince1970 / 86_400).rounded(.down)))
+        case .text(let s):
+            let k = s.trimmingCharacters(in: .whitespaces).lowercased()
+            if let d = Double(k) { return .n(d) }
+            return k.isEmpty ? nil : .t(k)
+        }
+    }
+
+    /// Rows of `to` related to `rows` of `from`, following the relationships a filter flows through.
+    func propagate(_ rows: Set<Int>, from: String, to: String) -> Set<Int>? {
+        let flow = model.filterFlow(from: from)
+        guard flow[to] != nil else { return nil }
+        var path: [(String, String, Relationship)] = []   // (from table, to table, relationship)
+        var t = to
+        while t != from, let step = flow[t] { path.insert((step.previous, t, step.via), at: 0); t = step.previous }
+        var current = rows
+        for (a, b, r) in path {
+            guard let ta = model.table(a), let tb = model.table(b) else { return nil }
+            let (ca, cb) = r.fromTable == a ? (r.fromColumn, r.toColumn) : (r.toColumn, r.fromColumn)
+            guard let ia = ta.columnIndex(ca), let ib = tb.columnIndex(cb) else { return nil }
+            var keys = Set<JoinValue>()
+            for row in current { if let k = Self.joinValue(ta.rows[row][ia]) { keys.insert(k) } }
+            var next = Set<Int>()
+            for (i, row) in tb.rows.enumerated() { if let k = Self.joinValue(row[ib]), keys.contains(k) { next.insert(i) } }
+            current = next
+        }
+        return current
+    }
+
+    /// Base rows allowed by a filter on a table the base can't reach through many-to-one relationships.
+    func propagatedRows(_ f: FilterSpec) -> Set<Int>? {
+        let key = FilterSpec.cacheKey([f])
+        if let hit = propagated.get(key) { return hit }
+        guard let t = model.table(f.field.table) else { return nil }
+        var rows = Set<Int>()
+        if let set = f.rowSet {
+            rows = set
+        } else if let ci = t.columnIndex(f.field.column) {
+            let memo = GroupKey.Memo(f.field.dateLevel)
+            for (i, row) in t.rows.enumerated() {
+                let v = row[ci]
+                if let range = f.range {
+                    guard let x = v.number ?? v.date?.timeIntervalSince1970, range.contains(x) else { continue }
+                }
+                if !f.allowed.isEmpty && !f.allowed.contains(memo.key(v).label) { continue }
+                rows.insert(i)
+            }
+        } else {
+            return nil
+        }
+        let out = propagate(rows, from: t.name, to: base.name)
+        propagated.set(key, out)
+        return out
+    }
+
     /// Distinct rows of `table` related to the given base rows (the base rows themselves for the base table).
     func relatedRows(_ table: String, _ rows: [Int]) -> [Int]? {
         if table == base.name { return rows }
-        guard let map = maps[table] else { return nil }
+        guard let map = maps[table] else {
+            // Reached the other way (from the "one" side, or through a both-way / many-to-many relationship).
+            return propagate(Set(rows), from: base.name, to: table).map { $0.sorted() }
+        }
         var seen = Set<Int>()
         var out: [Int] = []
         for r in rows { if let t = map[r], seen.insert(t).inserted { out.append(t) } }
@@ -385,6 +477,10 @@ struct QueryContext {
     /// Base rows passing the filters, among `within` (all base rows when nil).
     func rowIndices(_ filters: [FilterSpec], within: [Int]?) -> [Int] {
         var tests: [(Int) -> Bool] = []
+        for f in filters where f.isActive && !reaches(f.field.table) {
+            // Filters that reach the base through both-way or many-to-many relationships.
+            if let allowed = propagatedRows(f) { tests.append { allowed.contains($0) } }
+        }
         for f in filters where f.isActive && reaches(f.field.table) {
             if let set = f.rowSet {
                 let t = f.field.table
@@ -407,6 +503,14 @@ struct QueryContext {
         if tests.isEmpty { return all }
         return all.filter { b in tests.allSatisfy { $0(b) } }
     }
+}
+
+/// Thread-safe cache of propagated filters (a class, so copies of a query context share it).
+final class PropagationCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Set<Int>?] = [:]
+    func get(_ k: String) -> Set<Int>?? { lock.lock(); defer { lock.unlock() }; return values[k] }
+    func set(_ k: String, _ v: Set<Int>?) { lock.lock(); values[k] = v; lock.unlock() }
 }
 
 /// Query contexts and visual results for the current model version (cleared when the model changes).

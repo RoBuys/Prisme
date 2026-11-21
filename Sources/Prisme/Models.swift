@@ -602,6 +602,13 @@ struct Relationship: Identifiable, Hashable, Codable {
     var toTable: String
     var toColumn: String
     var isActive = true
+    /// Filters also flow from the "many" side to the "one" side.
+    var bothDirections: Bool?
+    /// Both columns may hold repeated values (many-to-many).
+    var manyToMany: Bool?
+
+    var crossBoth: Bool { bothDirections == true }
+    var isManyToMany: Bool { manyToMany == true }
 
     var label: String { "\(fromTable)[\(fromColumn)] → \(toTable)[\(toColumn)]" }
 
