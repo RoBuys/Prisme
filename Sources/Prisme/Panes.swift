@@ -534,6 +534,9 @@ struct FieldsPane: View {
                 Button(L("Renommer…")) { draft = t.name; renaming = t.name }
                 if t.source != nil { Button(L("Actualiser")) { state.refreshAll() } }
                 Button(L("Changer la source…")) { state.changeSource(of: t.name) }
+                if t.source?.sourceKind.isDatabase == true {
+                    Button(L("Identifiants…")) { state.credentialsTable = t.name }
+                }
                 Divider()
                 Button(L("Supprimer la table"), role: .destructive) { state.deleteTable(t.name) }
             }

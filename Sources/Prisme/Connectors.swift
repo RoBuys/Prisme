@@ -6,8 +6,12 @@ import CommonCrypto
 // MARK: - Source description
 
 enum SourceKind: String, Codable, CaseIterable, Identifiable {
-    case file, sqlite, postgres, mysql, web
+    case file, sqlite, postgres, mysql, sqlserver, web
     var id: String { rawValue }
+
+    var isDatabase: Bool { self == .postgres || self == .mysql || self == .sqlserver }
+
+    var defaultPort: Int { self == .postgres ? 5432 : self == .mysql ? 3306 : 1433 }
 
     var label: String {
         switch self {
@@ -15,6 +19,7 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
         case .sqlite: "SQLite"
         case .postgres: "PostgreSQL"
         case .mysql: "MySQL"
+        case .sqlserver: "SQL Server"
         case .web: L("Web / API (JSON)")
         }
     }
@@ -36,6 +41,7 @@ extension DataSource {
         case .file: return URL(fileURLWithPath: path).lastPathComponent + (sheet.map { " › \($0)" } ?? "")
         case .sqlite: return URL(fileURLWithPath: path).lastPathComponent
         case .postgres, .mysql: return "\(sourceKind.label) · \(host ?? ""):\(port ?? 0)/\(database ?? "")"
+        case .sqlserver: return "SQL Server · \(host ?? "")\(port.map { ",\($0)" } ?? "")/\(database ?? "")"
         case .web: return url ?? ""
         }
     }
@@ -56,6 +62,9 @@ extension Importer {
             return [try table(name, try pg.query(source.query ?? ""), source)]
         case .mysql:
             let grid = try MySQLCLI.query(source, password: Keychain.get(source.secretAccount) ?? "")
+            return [try table(name, grid, source)]
+        case .sqlserver:
+            let grid = try SQLServerCLI.query(source, password: Keychain.get(source.secretAccount) ?? "")
             return [try table(name, grid, source)]
         case .web:
             guard let s = source.url, let url = URL(string: s) else { throw ImportError(message: L("Adresse web invalide.")) }
@@ -426,6 +435,74 @@ enum MySQLCLI {
                 f == "NULL" || f.isEmpty ? .empty : .text(String(f))
             }
         }
+    }
+}
+
+// MARK: - SQL Server (through Microsoft's sqlcmd command-line client)
+
+enum SQLServerCLI {
+    static let candidates = ["/opt/homebrew/bin/sqlcmd", "/usr/local/bin/sqlcmd", "/opt/mssql-tools18/bin/sqlcmd",
+                             "/opt/mssql-tools/bin/sqlcmd"]
+
+    static var executable: String? { candidates.first { FileManager.default.isExecutableFile(atPath: $0) } }
+
+    /// Column separator: a control character unlikely to appear in data.
+    static let separator: Character = "\u{1F}"
+
+    /// Server argument: "host", "host,port" or "host\\instance" as given.
+    static func server(_ s: DataSource) -> String {
+        let h = s.host ?? "localhost"
+        if h.contains(",") || h.contains("\\") { return h }
+        return s.port.map { "\(h),\($0)" } ?? h
+    }
+
+    static func arguments(_ s: DataSource) -> [String] {
+        var args = ["-S", server(s), "-d", s.database ?? "", "-Q", "SET NOCOUNT ON; " + (s.query ?? ""),
+                    "-W", "-s", String(separator), "-w", "65535"]
+        if let u = s.user, !u.isEmpty { args += ["-U", u] }
+        else { args += ["--authentication-method", "ActiveDirectoryDefault"] }   // Microsoft Entra ID (az login)
+        if s.tls ?? true { args += ["-N", "true"] }
+        return args
+    }
+
+    static func query(_ s: DataSource, password: String) throws -> [[RawCell]] {
+        guard let exe = executable else {
+            throw ImportError(message: L("Client sqlcmd introuvable. Installez-le avec Homebrew : brew install sqlcmd"))
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: exe)
+        p.arguments = arguments(s)
+        var env = ProcessInfo.processInfo.environment
+        env["SQLCMDPASSWORD"] = password
+        p.environment = env
+        let out = Pipe(), err = Pipe()
+        p.standardOutput = out
+        p.standardError = err
+        try p.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let text = String(decoding: data, as: UTF8.self)
+        guard p.terminationStatus == 0 else {
+            let msg = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self) + text
+            throw ImportError(message: L("SQL Server : %@", msg.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        return parse(text)
+    }
+
+    /// sqlcmd output: header line, a line of dashes, then rows ("NULL" for nulls).
+    static func parse(_ text: String) -> [[RawCell]] {
+        var lines = text.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        lines.removeAll { $0.hasPrefix("(") && $0.hasSuffix("affected)") }
+        guard let header = lines.first else { return [] }
+        var grid: [[RawCell]] = [header.split(separator: separator, omittingEmptySubsequences: false).map { .text(String($0)) }]
+        var rest = lines.dropFirst()
+        if let dashes = rest.first, dashes.allSatisfy({ $0 == "-" || $0 == separator }) { rest = rest.dropFirst() }
+        for line in rest {
+            grid.append(line.split(separator: separator, omittingEmptySubsequences: false).map { f in
+                f == "NULL" || f.isEmpty ? .empty : .text(String(f))
+            })
+        }
+        return grid
     }
 }
 

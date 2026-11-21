@@ -843,6 +843,29 @@ final class AppState {
     }
 
     var showGetData = false
+    /// Table whose database credentials are being entered.
+    var credentialsTable: String?
+
+    /// Saves the credentials of a table's database source (password in the Keychain), then refreshes.
+    func saveCredentials(table: String, server: String, database: String, user: String, password: String, encrypted: Bool) {
+        guard let ti = tables.firstIndex(where: { $0.name == table }), let old = tables[ti].source else { return }
+        var s = old
+        s.host = server.trimmingCharacters(in: .whitespaces)
+        s.database = database.trimmingCharacters(in: .whitespaces)
+        s.user = user.trimmingCharacters(in: .whitespaces)
+        s.tls = encrypted
+        Keychain.set(password, for: s.secretAccount)
+        // Every table of the same server and database (as imported) uses these settings.
+        for i in tables.indices where tables[i].source.map({ $0.host == old.host && $0.database == old.database && $0.kind == old.kind }) == true {
+            tables[i].source?.host = s.host
+            tables[i].source?.database = s.database
+            tables[i].source?.user = s.user
+            tables[i].source?.tls = s.tls
+        }
+        credentialsTable = nil
+        didChange()
+        refreshAll()
+    }
 
     /// Imports a database or web source as a new table (connection secrets go to the Keychain).
     func importSource(_ source: DataSource, name: String, secret: String?) {

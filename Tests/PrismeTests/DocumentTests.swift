@@ -146,7 +146,8 @@ extension PrismeTests {
             #expect(xl?.0.sheet == "Feuil1")
             let pg = MSource.source(#"PostgreSQL.Database("db.local:6543", "shop"){[Schema="public",Item="orders"]}[Data]"#)
             #expect(pg?.0.kind == .postgres && pg?.0.port == 6543 && pg?.0.query == "SELECT * FROM public.orders")
-            #expect(MSource.source(#"Sql.Database("srv", "db")"#) == nil)
+            #expect(MSource.source(#"Sql.Database("srv", "db")"#)?.0.kind == .sqlserver)
+            #expect(MSource.source(#"Oracle.Database("srv")"#) == nil)
         }
     }
 }

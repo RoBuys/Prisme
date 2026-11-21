@@ -867,13 +867,27 @@ enum MSource {
             }
             i += 1
         }
-        return out
+        return out.map(PowerQuery.unescape)
     }
 
     /// First string literal following `function(` in the expression.
     static func argument(_ m: String, after function: String, index: Int = 0) -> String? {
         guard let r = m.range(of: function + "(") else { return nil }
         let rest = m[r.upperBound...]
+        if index > 0 {
+            // Later arguments: a literal, or a variable bound to one; anything else (a parameter without value) is unknown.
+            guard let args = PowerQuery.callArguments(m, function: function), index < args.count else { return nil }
+            switch args[index] {
+            case .string(let s): return s
+            case .ident(let name):
+                let id = NSRegularExpression.escapedPattern(for: name)
+                guard let re = try? NSRegularExpression(pattern: "(?:#\"" + id + "\"|\\b" + id + "\\b)\\s*=\\s*\"((?:[^\"]|\"\")*)\""),
+                      let match = re.firstMatch(in: m, range: NSRange(m.startIndex..., in: m)),
+                      let v = Range(match.range(at: 1), in: m) else { return nil }
+                return String(m[v]).replacingOccurrences(of: "\"\"", with: "\"")
+            default: return nil
+            }
+        }
         if index == 0 {
             // First argument: a text literal, or a step/variable of the query bound to one (`Url = "https://…"`).
             let t = rest.drop { $0.isWhitespace }
@@ -897,7 +911,7 @@ enum MSource {
         guard let re = try? NSRegularExpression(pattern: key + "\\s*=\\s*\"((?:[^\"]|\"\")*)\""),
               let match = re.firstMatch(in: m, range: NSRange(m.startIndex..., in: m)),
               let r = Range(match.range(at: 1), in: m) else { return nil }
-        return String(m[r]).replacingOccurrences(of: "\"\"", with: "\"")
+        return PowerQuery.unescape(String(m[r]).replacingOccurrences(of: "\"\"", with: "\""))
     }
 
     /// "Enter data" tables: rows stored in the query as deflated, base64-encoded JSON.
@@ -1111,6 +1125,18 @@ enum MSource {
             let sheet = m.contains("Excel.Workbook") ? navigation(m, "Item") : nil
             return (DataSource(sheet: sheet, kind: .web, url: url), nil)
         }
+        for fn in ["Sql.Database", "Sql.Databases"] {
+            guard m.contains(fn + "(") else { continue }
+            // Server and database may be parameters without a value: entered with the credentials then.
+            let server = argument(m, after: fn) ?? ""
+            let db = (fn == "Sql.Database" ? argument(m, after: fn, index: 1) : navigation(m, "Name")) ?? ""
+            var query = navigation(m, "Query")
+            if query == nil, let item = navigation(m, "Item") {
+                let schema = navigation(m, "Schema") ?? "dbo"
+                query = "SELECT * FROM [\(schema)].[\(item)]"
+            }
+            return (DataSource(kind: .sqlserver, query: query, host: server, database: db), nil)
+        }
         for (fn, kind, defaultPort) in [("PostgreSQL.Database", SourceKind.postgres, 5432), ("MySQL.Database", SourceKind.mysql, 3306)] {
             guard m.contains(fn), let server = argument(m, after: fn), let db = argument(m, after: fn, index: 1) else { continue }
             let hp = server.split(separator: ":")
@@ -1199,6 +1225,7 @@ extension AppState {
         }
 
         var missingFiles: [String] = [], parameterTables: [String] = [], unsupported: [String: [String]] = [:]
+        var untranslated: [String: [String]] = [:], needsCredentials: [String: [String]] = [:], pendingSteps: [String] = []
         let params = MSource.parameters(project.queries)
         if project.fromPBIXModel {
             notes.append(project.storedData.isEmpty
@@ -1238,6 +1265,18 @@ extension AppState {
             var table = DataTable(name: spec.name, columns: dataCols.map { DataColumn(name: $0.name, type: Self.columnType($0.dataType)) }, rows: [])
             // Parameters resolved, helper queries followed to the actual source.
             let mExpr = spec.mExpression.map { MSource.effective($0, queries: project.queries, params: params) }
+            // Power Query steps, translated (then aligned on the model's columns) to be replayed on the source data.
+            let translation = spec.mExpression.map { PowerQuery.translate($0, queries: project.queries) } ?? PowerQuery.Translation()
+            for u in Set(translation.unsupported) { untranslated[u, default: []].append(spec.name) }
+            var recipe = translation.steps
+            if !recipe.isEmpty {
+                for c in dataCols where (c.sourceColumn ?? c.name) != c.name {
+                    recipe.append(TransformStep(kind: .renameColumn, column: c.sourceColumn ?? c.name, text: c.name))
+                }
+                var keep = TransformStep(kind: .keepColumns)
+                keep.columns = dataCols.map(\.name)
+                recipe.append(keep)
+            }
             if let value = params[spec.queryName ?? spec.name] ?? spec.mExpression.flatMap({ MSource.parameterValue($0) ?? MSource.constantValue($0) }),
                !dataCols.isEmpty {
                 // Parameter query: a one-value table.
@@ -1250,22 +1289,39 @@ extension AppState {
                let rows = Self.storedRows(stored, dataCols, table.columns.map(\.type)) {
                 // Data snapshot stored in the .pbix; the source is kept for a later refresh when it is reachable.
                 table.rows = rows
-                if let m = spec.mExpression, let (source, _) = MSource.source(m),
+                if let m = mExpr, let (source, _) = MSource.source(m),
                    source.sourceKind != .file || FileManager.default.fileExists(atPath: source.path) {
                     table.source = source
+                    table.steps = recipe   // replayed when the source is refreshed
                 }
                 loadedCount += 1
             } else if let m = mExpr, var (source, path) = MSource.source(m) {
                 if let p = path {
                     if let found = locate(p, near: project.folder, ask: askForFiles) { source.path = found } else { path = nil; source.path = "" }
                 }
-                if source.sourceKind != .file || !source.path.isEmpty {
+                if source.sourceKind.isDatabase && Keychain.get(source.secretAccount) == nil {
+                    // No saved credentials: linked now, loaded once they're entered (Data › table menu › Credentials).
+                    table.source = source
+                    table.steps = recipe
+                    needsCredentials[source.sourceKind.label, default: []].append(spec.name)
+                } else if source.sourceKind != .file || !source.path.isEmpty {
                     do {
                         let loaded = try Importer.load(source: source, name: spec.name)
                         let pick = loaded.first { source.sheet == nil || $0.source?.sheet == source.sheet || $0.name == source.sheet } ?? loaded.first
                         if let l = pick {
-                            table.rows = Self.align(l, to: dataCols, types: table.columns.map(\.type))
                             table.source = source
+                            if recipe.isEmpty {
+                                table.rows = Self.align(l, to: dataCols, types: table.columns.map(\.type))
+                            } else {
+                                // Steps applied once every table is loaded (merges and appends read other tables).
+                                var base = l
+                                base.name = spec.name
+                                base.steps = []
+                                base.base = []
+                                table.base = [base]
+                                table.steps = recipe
+                                pendingSteps.append(spec.name)
+                            }
                             loadedCount += 1
                         }
                     } catch {
@@ -1291,6 +1347,7 @@ extension AppState {
                 measures.append(Measure(name: m.name, table: spec.name, expression: m.expression, format: Self.measureFormat(m.format)))
             }
         }
+        applyImportedSteps(pendingSteps)
         if !project.hasModel {
             // Placeholder measures so the visuals stay wired; their DAX has to be re-entered.
             var seen = Set<String>()
@@ -1318,6 +1375,15 @@ extension AppState {
             notes.append(L("Un modèle .pbit ne contient pas de données : utilisez « Changer la source… » pour relier ces tables à un fichier."))
         }
         if !missingFiles.isEmpty { notes.append(L("Fichier source introuvable, tables vides : %@.", list(missingFiles))) }
+        for (kind, names) in needsCredentials.sorted(by: { $0.key < $1.key }) {
+            notes.append(L("Source %@ : saisissez les identifiants (menu de la table › Identifiants…) pour charger %@.", kind, list(names)))
+        }
+        if !untranslated.isEmpty {
+            notes.append(L("Étapes Power Query non reprises : %@.", untranslated.sorted(by: { $0.key < $1.key })
+                .map { "\($0.key) (\(list(Array(Set($0.value)).sorted())))" }.joined(separator: ", ")))
+        }
+        let stepFailures = tables.filter { !(stepErrors[$0.name] ?? [:]).isEmpty }.map(\.name)
+        if !stepFailures.isEmpty { notes.append(L("Certaines étapes n'ont pas pu s'appliquer (voir Données › Étapes appliquées) : %@.", list(stepFailures))) }
         if !parameterTables.isEmpty { notes.append(L("Paramètres sans valeur : %@.", list(parameterTables))) }
 
         for (name, expr) in calculatedTables { _ = fillCalculatedTable(name, expr) }
@@ -1570,6 +1636,28 @@ extension AppState {
         case .column(let t, let c), .level(let t, let c, _):
             let f = FieldRef(table: t, column: c)
             return ValueField(field: f, aggregation: defaultAggregation(for: f))
+        }
+    }
+
+    /// Applies the translated Power Query steps of imported tables, tables read by merges and appends first.
+    private func applyImportedSteps(_ names: [String]) {
+        var pending = names
+        while !pending.isEmpty {
+            let ready = pending.filter { n in
+                guard let t = tables.first(where: { $0.name == n }) else { return true }
+                return !t.steps.contains { ($0.kind == .mergeTable || $0.kind == .appendTable) && pending.contains($0.text) && $0.text != n }
+            }
+            let batch = ready.isEmpty ? [pending[0]] : ready   // a cycle: apply anyway
+            for n in batch {
+                guard let ti = tables.firstIndex(where: { $0.name == n }), let base = tables[ti].base.first else { continue }
+                let calculated = tables[ti].columns.filter { $0.expression != nil }
+                let result = Transform.apply(tables[ti].steps, columns: base.columns, rows: base.rows, tables: tables.filter { $0.name != n })
+                tables[ti].columns = result.columns + calculated.filter { c in !result.columns.contains { $0.name == c.name } }
+                let pad = tables[ti].columns.count - result.columns.count
+                tables[ti].rows = result.rows.map { $0 + Array(repeating: CellValue.empty, count: pad) }
+                stepErrors[n] = result.errors
+            }
+            pending.removeAll { batch.contains($0) }
         }
     }
 

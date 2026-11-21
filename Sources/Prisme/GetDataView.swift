@@ -52,9 +52,9 @@ struct GetDataView: View {
                         }
                     }
                     queryField
-                case .postgres, .mysql:
+                case .postgres, .mysql, .sqlserver:
                     TextField(L("Serveur"), text: $host)
-                    TextField(L("Port"), text: $port, prompt: Text(kind == .postgres ? "5432" : "3306"))
+                    TextField(L("Port"), text: $port, prompt: Text("\(kind.defaultPort)"))
                     TextField(L("Base de données"), text: $database)
                     TextField(L("Utilisateur"), text: $user)
                     SecureField(L("Mot de passe"), text: $password)
@@ -62,6 +62,10 @@ struct GetDataView: View {
                     queryField
                     if kind == .mysql && MySQLCLI.executable == nil {
                         Text(L("Client mysql introuvable. Installez-le avec Homebrew : brew install mysql-client"))
+                            .font(.system(size: 11)).foregroundStyle(.orange)
+                    }
+                    if kind == .sqlserver && SQLServerCLI.executable == nil {
+                        Text(L("Client sqlcmd introuvable. Installez-le avec Homebrew : brew install sqlcmd"))
                             .font(.system(size: 11)).foregroundStyle(.orange)
                     }
                 case .web:
@@ -104,6 +108,7 @@ struct GetDataView: View {
         case .file: true
         case .sqlite: !path.isEmpty && !query.isEmpty
         case .postgres, .mysql: !host.isEmpty && !database.isEmpty && !user.isEmpty && !query.isEmpty
+        case .sqlserver: !host.isEmpty && !database.isEmpty && !query.isEmpty
         case .web: URL(string: url)?.scheme?.hasPrefix("http") == true
         }
     }
@@ -124,9 +129,9 @@ struct GetDataView: View {
         case .sqlite:
             s.path = path
             s.query = query
-        case .postgres, .mysql:
+        case .postgres, .mysql, .sqlserver:
             s.host = host
-            s.port = Int(port) ?? (kind == .postgres ? 5432 : 3306)
+            s.port = Int(port) ?? (kind == .sqlserver ? nil : kind.defaultPort)
             s.database = database
             s.user = user
             s.tls = tls
@@ -137,5 +142,60 @@ struct GetDataView: View {
             s.jsonPath = jsonPath.isEmpty ? nil : jsonPath
         }
         state.importSource(s, name: name, secret: kind == .web ? headerValue : password)
+    }
+}
+
+
+/// Credentials of a table's database source (imported reports carry the server and query, not the password).
+struct CredentialsSheet: View {
+    let table: String
+    @Environment(AppState.self) private var state
+    @Environment(\.dismiss) private var dismiss
+    @State private var server = ""
+    @State private var database = ""
+    @State private var user = ""
+    @State private var password = ""
+    @State private var encrypted = true
+
+    var body: some View {
+        let source = state.tables.first { $0.name == table }?.source
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L("Identifiants")).font(.title3.weight(.semibold))
+            Text(source?.displayName ?? table).font(.system(size: 12)).foregroundStyle(.secondary)
+            Form {
+                TextField(L("Serveur"), text: $server)
+                TextField(L("Base de données"), text: $database)
+                TextField(L("Utilisateur"), text: $user)
+                SecureField(L("Mot de passe"), text: $password)
+                Toggle(L("Connexion chiffrée (TLS)"), isOn: $encrypted)
+            }
+            if source?.sourceKind == .sqlserver {
+                Text(L("Laissez l'utilisateur vide pour un compte Microsoft Entra (connexion « az login »)."))
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                if SQLServerCLI.executable == nil {
+                    Text(L("Client sqlcmd introuvable. Installez-le avec Homebrew : brew install sqlcmd"))
+                        .font(.system(size: 11)).foregroundStyle(.orange)
+                }
+            }
+            Text(L("Les mots de passe et jetons sont enregistrés dans le trousseau macOS, jamais dans le rapport."))
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+            HStack {
+                Spacer()
+                Button(L("Annuler"), role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(L("Se connecter")) {
+                    state.saveCredentials(table: table, server: server, database: database, user: user, password: password, encrypted: encrypted)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(server.isEmpty || database.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .onAppear {
+            server = source?.host ?? ""
+            database = source?.database ?? ""
+            user = source?.user ?? ""
+            encrypted = source?.tls ?? (source?.sourceKind == .sqlserver)
+        }
     }
 }

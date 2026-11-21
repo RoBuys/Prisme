@@ -7,6 +7,8 @@ struct TransformStep: Codable, Hashable, Identifiable {
         case renameColumn, removeColumn, changeType, filterRows, replaceValues, splitColumn, trim, fillDown
         case removeDuplicates, removeBlankRows, keepTopRows, appendTable, addIndex
         case mergeTable, groupBy, pivotColumn, unpivotColumns, conditionalColumn
+        /// From Power Query: keep columns, sort, skip rows, custom column / row filter (DAX formula in text2).
+        case keepColumns, sortRows, skipRows, customColumn, filterFormula
     }
 
     enum JoinKind: String, Codable, CaseIterable {
@@ -115,6 +117,11 @@ struct TransformStep: Codable, Hashable, Identifiable {
         case .pivotColumn: L("Pivoter « %@ » (valeurs : %@)", column, text)
         case .unpivotColumns: L("Dépivoter %@", columns.joined(separator: ", "))
         case .conditionalColumn: L("Colonne conditionnelle « %@ »", text)
+        case .keepColumns: L("Conserver les colonnes %@", columns.joined(separator: ", "))
+        case .sortRows: L("Trier par %@", columns.joined(separator: ", "))
+        case .skipRows: L("Ignorer les %@ premières lignes", count)
+        case .customColumn: L("Colonne « %@ » = %@", text, text2)
+        case .filterFormula: L("Filtrer : %@", text2)
         }
     }
 
@@ -138,6 +145,11 @@ struct TransformStep: Codable, Hashable, Identifiable {
         case .pivotColumn: "arrow.turn.right.up"
         case .unpivotColumns: "arrow.turn.down.right"
         case .conditionalColumn: "questionmark.diamond"
+        case .keepColumns: "checklist"
+        case .sortRows: "arrow.up.arrow.down"
+        case .skipRows: "text.line.first.and.arrowtriangle.forward"
+        case .customColumn: "function"
+        case .filterFormula: "line.3.horizontal.decrease.circle"
         }
     }
 }
@@ -348,7 +360,9 @@ enum Transform {
                 key + pivots.map { l in cells[key]![l]?.result(s.aggregation).map { CellValue.number($0) } ?? .empty }
             }
         case .unpivotColumns:
-            let un = Set(try s.columns.map { try index($0, cols) })
+            // text3 "others": the listed columns are kept and every other one is unpivoted (Table.UnpivotOtherColumns).
+            let listed = Set(try s.columns.map { try index($0, cols) })
+            let un = s.text3 == "others" ? Set(cols.indices).subtracting(listed) : listed
             guard !un.isEmpty else { throw MeasureError(message: L("Choisissez au moins une colonne.")) }
             let keep = cols.indices.filter { !un.contains($0) }
             var out: [[CellValue]] = []
@@ -385,6 +399,52 @@ enum Transform {
             _ = i
             cols.append(DataColumn(name: unique(s.text.isEmpty ? L("Personnalisée") : s.text, cols), type: type))
             for r in rows.indices { rows[r].append(values[r]) }
+        case .keepColumns:
+            let keep = try s.columns.map { try index($0, cols) }
+            cols = keep.map { cols[$0] }
+            rows = rows.map { r in keep.map { r[$0] } }
+        case .sortRows:
+            let keys = try s.columns.map { try index($0, cols) }
+            let desc = s.text.split(separator: ",").map { $0 == "1" }
+            rows.sort { a, b in
+                for (k, c) in keys.enumerated() {
+                    let x = GroupKey.of(a[c], nil), y = GroupKey.of(b[c], nil)
+                    if x == y { continue }
+                    let d = k < desc.count && desc[k]
+                    return d ? y < x : x < y
+                }
+                return false
+            }
+        case .skipRows:
+            rows = Array(rows.dropFirst(max(0, s.count)))
+        case .customColumn, .filterFormula:
+            // DAX formula evaluated on each row of the current data.
+            guard case .success(let e) = MeasureCompiler.parse(s.text2) else { throw MeasureError(message: L("Formule invalide : %@", s.text2)) }
+            let t = DataTable(name: "__step", columns: cols, rows: rows)
+            let m = DataModel(tables: [t], relationships: [])
+            let ev = MeasureEvaluator(ctx: QueryContext(base: t, model: m), model: m)
+            let values = try rows.indices.map { try ev.evaluateRow(e, row: $0) }
+            if s.kind == .filterFormula {
+                rows = zip(rows, values).filter { $0.1.truthy }.map(\.0)
+                return
+            }
+            let raw = values.map { v -> RawCell in
+                switch v {
+                case .blank: return .empty
+                case .number(let d): return d.isFinite ? .number(d) : .empty
+                case .date(let d): return .date(d)
+                case .bool(let b): return .text(b ? "TRUE" : "FALSE")
+                case .text(let x): return x.isEmpty ? .empty : .text(x)
+                }
+            }
+            let (type, typed) = Importer.inferColumn(raw)
+            if let i = cols.firstIndex(where: { $0.name == s.text }) {
+                cols[i].type = type
+                for r in rows.indices { rows[r][i] = typed[r] }
+            } else {
+                cols.append(DataColumn(name: s.text.isEmpty ? L("Personnalisée") : s.text, type: type))
+                for r in rows.indices { rows[r].append(typed[r]) }
+            }
         }
     }
 }

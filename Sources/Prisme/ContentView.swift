@@ -113,6 +113,9 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { state.showGetData }, set: { state.showGetData = $0 })) {
             GetDataView().environment(state)
         }
+        .sheet(isPresented: Binding(get: { state.credentialsTable != nil }, set: { if !$0 { state.credentialsTable = nil } })) {
+            if let t = state.credentialsTable { CredentialsSheet(table: t).environment(state) }
+        }
         .sheet(item: Binding(get: { state.measureDraft }, set: { state.measureDraft = $0 })) { d in
             MeasureEditor(draft: d).environment(state)
         }
