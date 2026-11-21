@@ -738,6 +738,7 @@ enum Strings {
         "Modifier la table calculée…": "Edit Calculated Table…",
         "Résultat : ": "Result: ",
         "Nouvelle table": "New table",
+        "Thème du rapport importé": "Imported report theme",
         "%@ rôle(s) de sécurité importé(s) : Affichage › Afficher en tant que.": "%@ security role(s) imported: View › Roles.",
         "Gérer les rôles": "Manage roles",
         "Gérer les rôles…": "Manage Roles…",

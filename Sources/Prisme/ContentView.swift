@@ -12,9 +12,15 @@ enum Theme {
         ("mono", "Monochrome", [0x1F2937, 0x4B5563, 0x6B7280, 0x9CA3AF, 0xD1D5DB, 0x374151, 0x111827, 0x7C8594, 0xB0B7C3, 0xE5E7EB]),
     ]
 
+    /// Built-in themes, plus the report's own colors when it has some (imported from Power BI).
+    static var all: [(id: String, name: String, colors: [UInt32])] {
+        let custom = AppState.shared.customColors
+        return themes + (custom.isEmpty ? [] : [("custom", L("Thème du rapport importé"), custom)])
+    }
+
     static var palette: [Color] {
         let id = AppState.shared.theme
-        return (themes.first { $0.id == id } ?? themes[0]).colors.map { Color(hex: $0) }
+        return (all.first { $0.id == id } ?? themes[0]).colors.map { Color(hex: $0) }
     }
 
     static func colors(_ n: Int, first: String? = nil) -> [Color] {

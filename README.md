@@ -11,7 +11,7 @@ import data, then build interactive reports with drag and drop. The interface is
   **Obtenir des données** (Get data). **Actualiser** (Refresh) re-reads the source files.
 - **Databases and web sources** (**Obtenir des données** / Get data, ⌘I): **SQLite** (system library), **PostgreSQL**
   (built-in client: protocol v3, SCRAM-SHA-256 / MD5 / password authentication, optional TLS), **MySQL** (through the
-  `mysql` command-line client, e.g. `brew install mysql-client`) and **web APIs / JSON** (GET with an optional header
+  `mysql` command-line client, e.g. `brew install mysql-client`), **SQL Server** (through `sqlcmd`, `brew install sqlcmd`) and **web APIs / JSON** (GET with an optional header
   such as `Authorization`, nested objects flattened to `a.b` columns, optional JSON path). Passwords and tokens are
   kept in the macOS Keychain; refresh re-runs the query.
 - **Automatic column typing** (number, text, date), editable in the **Données** (Data) view.
@@ -153,17 +153,33 @@ The report list uses the Power BI REST API (`GET /reports`, which includes repor
 `powerbi-client` (loaded from jsDelivr with Subresource Integrity), using your Entra token (`TokenType.Aad`), which is
 renewed automatically.
 
+### Power BI compatibility (1.0)
+
+- **Report state**: report, page and visual filters, slicer selections, hidden visuals and groups, bookmarks (with
+  their data / display / page / target options), button actions (bookmark, page, back, link), page navigators.
+- **Relationships**: both-way filtering and many-to-many relationships.
+- **Data**: SQL Server (through `sqlcmd`), Power Query steps translated into Prisme steps (types, renames,
+  column selection, row filters and custom columns from `each` expressions, replace, sort, group by, merge, append,
+  unpivot, fill down, index…), shown in Applied steps and replayed on refresh; credentials entered per source.
+- **DAX**: `CROSSJOIN`, `UNION`, `GENERATE`, `GROUPBY`/`CURRENTGROUP`, table constructors, `NAMEOF`,
+  `DATESBETWEEN`, `DATESINPERIOD`, `PARALLELPERIOD`, next/previous periods, context transition in `CALCULATE`,
+  calculation groups (`SELECTEDMEASURE`), row-level security (Manage roles, View as role, `USERPRINCIPALNAME`).
+- **Look**: the report's custom theme colors and chart formatting (color, data labels, legend, axis titles,
+  gridlines).
+
 ## Known limitations
 
-- No many-to-many relationships, no bidirectional filtering.
-- The measure language is a subset of DAX: no `CROSSJOIN`, `UNION`, `GENERATE`, `GROUPBY`, no table constructors
-  (`{ … }`, used by field parameters), no calculation groups.
+- DAX: no `TREATAS`, `CROSSFILTER`, `GENERATESERIES` over dates, `ROLLUP` in `SUMMARIZE`; field parameters compute
+  their table but don't switch the fields of visuals.
+- Power Query: common `Table.*` steps are replayed (see above); other functions (`Table.Pivot`, custom functions,
+  `List.Generate`…) and connectors such as Dataverse, SharePoint or OData aren't. SQL Server goes through Microsoft's
+  `sqlcmd` (`brew install sqlcmd`); it hasn't been tested against a live server.
+- Visuals: no AI visuals (key influencers, decomposition tree, Q&A), custom visuals, small multiples, tooltip pages
+  or mobile layout; per-series colors and conditional formatting from Power BI aren't imported.
 - .pbit export: date levels on an axis (year, month…) are exported as the date column (Power BI's auto date
   tables aren't generated); images, shapes, buttons, page filters and slicer selections aren't exported. The
   template is checked by reimporting it into Prisme; opening it in Power BI Desktop hasn't been tested on Windows.
-- Power BI import doesn't run M transformations (only the source is read); .pbix files saved with the multithreaded
-  XPress9 variant (very large models) aren't supported yet.
-- Transformations cover common steps only (no custom M code, no fuzzy merge).
+- .pbix files saved with the multithreaded XPress9 variant (very large models) aren't supported yet.
 
 ## Structure
 

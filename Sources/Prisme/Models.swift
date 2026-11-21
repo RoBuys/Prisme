@@ -667,11 +667,13 @@ struct ReportDocument: Codable {
     var bookmarks: [Bookmark] = []
     var reportFilters: [PageFilter] = []
     var roles: [SecurityRole] = []
+    var customColors: [UInt32] = []
 
     init(tables: [DataTable], pages: [ReportPage], relationships: [Relationship], measures: [Measure],
          modelLayout: [String: CGPoint], theme: String?, bookmarks: [Bookmark] = [], reportFilters: [PageFilter] = [],
-         roles: [SecurityRole] = []) {
+         roles: [SecurityRole] = [], customColors: [UInt32] = []) {
         self.roles = roles
+        self.customColors = customColors
         self.theme = theme
         self.bookmarks = bookmarks
         self.reportFilters = reportFilters
@@ -683,7 +685,7 @@ struct ReportDocument: Codable {
         self.modelLayout = modelLayout
     }
 
-    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout, theme, bookmarks, reportFilters, roles }
+    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout, theme, bookmarks, reportFilters, roles, customColors }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -697,5 +699,6 @@ struct ReportDocument: Codable {
         bookmarks = try c.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
         reportFilters = try c.decodeIfPresent([PageFilter].self, forKey: .reportFilters) ?? []
         roles = try c.decodeIfPresent([SecurityRole].self, forKey: .roles) ?? []
+        customColors = try c.decodeIfPresent([UInt32].self, forKey: .customColors) ?? []
     }
 }

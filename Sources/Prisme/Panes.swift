@@ -406,7 +406,7 @@ struct VisualizationsPane: View {
     private var themePicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(L("Thème du rapport")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            ForEach(Theme.themes, id: \.id) { t in
+            ForEach(Theme.all, id: \.id) { t in
                 Button {
                     state.theme = t.id
                     state.didChange()

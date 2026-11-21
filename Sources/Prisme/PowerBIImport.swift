@@ -25,6 +25,8 @@ struct PBIVisualSpec {
     var roles: [String: [PBIField]] = [:]
     /// Text boxes, shapes, buttons and images.
     var element: ElementContent?
+    /// Chart formatting (color, data labels, legend, axis titles, gridlines).
+    var format: VisualFormat?
     /// Image visuals: file name in the report's registered resources.
     var imageName: String?
     /// Report state: identifier in the report, group, visibility, filters, slicer selection, button action.
@@ -92,6 +94,8 @@ struct PBIProject {
     var reportFilters: [PBIFilterEntry] = []
     var bookmarks: [[String: Any]] = []
     var roles: [SecurityRole] = []
+    /// Data colors of the report's custom theme.
+    var themeColors: [UInt32] = []
     var folder: URL
 }
 
@@ -145,6 +149,7 @@ enum PowerBIImporter {
             throw ImportError(message: L("Mise en page du rapport introuvable dans « %@ ».", url.lastPathComponent))
         }
         attachImages(&p.pages, resources: dir.appendingPathComponent("Report/StaticResources/RegisteredResources"))
+        p.themeColors = themeColors(dir.appendingPathComponent("Report"))
         addTableQueries(&p)
         return p
     }
@@ -189,6 +194,7 @@ enum PowerBIImporter {
             throw ImportError(message: L("Rapport introuvable dans le projet « %@ ».", url.lastPathComponent))
         }
         attachImages(&p.pages, resources: reportDir.appendingPathComponent("StaticResources/RegisteredResources"))
+        p.themeColors = themeColors(reportDir)
         addTableQueries(&p)
         return p
     }
@@ -721,6 +727,34 @@ enum PowerBIImporter {
         }
     }
 
+    /// Chart formatting of a visual's objects (default values, not per-series ones).
+    static func visualFormat(_ objects: [String: Any]) -> VisualFormat? {
+        var f = VisualFormat(), set = false
+        if let c = color(props(objects, "dataPoint")["fill"]) { f.color = c; set = true }
+        if literal(props(objects, "labels")["show"]) == "true" { f.dataLabels = true; set = true }
+        if literal(props(objects, "legend")["show"]) == "false" { f.showLegend = false; set = true }
+        if [props(objects, "categoryAxis"), props(objects, "valueAxis")].contains(where: { literal($0["showAxisTitle"]) == "true" }) {
+            f.axisTitles = true; set = true
+        }
+        if literal(props(objects, "valueAxis")["gridlineShow"]) == "false" { f.gridlines = false; set = true }
+        return set ? f : nil
+    }
+
+    /// Data colors of the report's custom theme (Report/StaticResources/RegisteredResources/<theme>.json).
+    static func themeColors(_ report: URL) -> [UInt32] {
+        var name: String?
+        for json in [report.appendingPathComponent("definition/report.json"), report.appendingPathComponent("Layout"),
+                     report.appendingPathComponent("report.json")] {
+            guard let d = (try? Data(contentsOf: json)).flatMap({ jsonObject($0) as? [String: Any] }) else { continue }
+            let config = (d["config"] as? String).flatMap { jsonObject(Data($0.utf8)) as? [String: Any] } ?? d
+            if let n = ((config["themeCollection"] as? [String: Any])?["customTheme"] as? [String: Any])?["name"] as? String { name = n; break }
+            if let n = d["theme"] as? String { name = n; break }
+        }
+        guard let name, let data = try? Data(contentsOf: report.appendingPathComponent("StaticResources/RegisteredResources/\(name)")),
+              let theme = jsonObject(data) as? [String: Any], let colors = theme["dataColors"] as? [String] else { return [] }
+        return colors.compactMap { UInt32($0.trimmingCharacters(in: CharacterSet(charactersIn: "#")), radix: 16) }
+    }
+
     /// Name of an image visual's registered resource.
     static func imageName(_ objects: [String: Any]) -> String? {
         let url = props(objects, "general")["imageUrl"] as? [String: Any]
@@ -768,6 +802,7 @@ enum PowerBIImporter {
                 spec.hidden = ((sv["display"] as? [String: Any])?["mode"] as? String) == "hidden"
                 spec.filters = PBIFilters.entries(vc["filters"])
                 spec.slicer = PBIFilters.slicerCondition(sv["objects"])
+                spec.format = visualFormat(sv["objects"] as? [String: Any] ?? [:])
                 spec.link = PBIFilters.link(sv["vcObjects"])
                 let query = sv["prototypeQuery"] as? [String: Any] ?? [:]
                 var aliases: [String: String] = [:]
@@ -858,6 +893,7 @@ enum PowerBIImporter {
                 spec.hidden = vj["isHidden"] as? Bool ?? false
                 spec.filters = PBIFilters.entries(vj["filterConfig"])
                 spec.slicer = PBIFilters.slicerCondition(visual["objects"])
+                spec.format = visualFormat(visual["objects"] as? [String: Any] ?? [:])
                 spec.link = PBIFilters.link(visual["visualContainerObjects"])
                 let state = (visual["query"] as? [String: Any])?["queryState"] as? [String: Any] ?? [:]
                 for (role, value) in state {
@@ -1503,6 +1539,8 @@ extension AppState {
         if pages.isEmpty { pages = [ReportPage(name: L("Page 1"))] }
         let bookmarkByPBI = importBookmarks(project, pageByPBI: pageByPBI, visualByPBI: visualByPBI)
         roles = project.roles
+        customColors = project.themeColors
+        if !customColors.isEmpty { theme = "custom" }
         if !roles.isEmpty { notes.append(L("%@ rôle(s) de sécurité importé(s) : Affichage › Afficher en tant que.", roles.count)) }
         for l in links {
             let action: ButtonAction?
@@ -1611,6 +1649,7 @@ extension AppState {
         reportFilters = []
         roles = []
         viewAsRole = nil
+        customColors = []
         modelLayout = [:]
         theme = Theme.defaultName
         pages = []
@@ -1813,6 +1852,7 @@ extension AppState {
             if t.isEmpty { v.showTitle = false } else { v.title = t }
         }
         if let e = s.element { v.content = e; v.showTitle = false }
+        if s.element == nil, let f = s.format { v.format = f }
         return v
     }
 

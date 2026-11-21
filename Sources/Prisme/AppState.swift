@@ -62,6 +62,8 @@ final class AppState {
     var viewAsRole: String? { didSet { modelVersion = Self.nextVersion() } }
     var viewAsUser = "" { didSet { modelVersion = Self.nextVersion() } }
     var showRoles = false
+    /// Data colors of the theme of an imported report (theme id "custom").
+    var customColors: [UInt32] = []
     @ObservationIgnored private var roleCache: (version: Int, tables: [DataTable])?
     /// Report color theme (see `Theme.themes`).
     var theme = Theme.defaultName
@@ -1562,6 +1564,7 @@ final class AppState {
         reportFilters = []
         roles = []
         viewAsRole = nil
+        customColors = []
         theme = Theme.defaultName
         modelLayout = [:]
         pages = [p]
@@ -1595,6 +1598,7 @@ final class AppState {
             bookmarks = doc.bookmarks
             reportFilters = doc.reportFilters
             roles = doc.roles
+            customColors = doc.customColors
             viewAsRole = nil
             pages = doc.pages.isEmpty ? [ReportPage(name: L("Page 1"))] : doc.pages
             currentPageID = pages[0].id
@@ -1627,7 +1631,7 @@ final class AppState {
 
     private func write(to url: URL) -> Bool {
         do {
-            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout, theme: theme, bookmarks: bookmarks, reportFilters: reportFilters, roles: roles))
+            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout, theme: theme, bookmarks: bookmarks, reportFilters: reportFilters, roles: roles, customColors: customColors))
             try data.write(to: url, options: .atomic)
             fileURL = url
             isDirty = false
