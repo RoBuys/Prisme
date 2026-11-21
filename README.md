@@ -2,7 +2,6 @@
 
 [![Latest release](https://img.shields.io/github/v/release/RoBuys/Prisme)](https://github.com/RoBuys/Prisme/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/RoBuys/Prisme/total?label=downloads)](https://github.com/RoBuys/Prisme/releases)
-[![Clones](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/RoBuys/Prisme/traffic/clones-badge.json)](https://github.com/RoBuys/Prisme/tree/traffic)
 [![Stars](https://img.shields.io/github/stars/RoBuys/Prisme?style=flat)](https://github.com/RoBuys/Prisme/stargazers)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-lightgrey)](#)
