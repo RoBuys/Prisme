@@ -137,6 +137,7 @@ enum PowerBIImporter {
             p.hasModel = false
         }
         let pbir = dir.appendingPathComponent("Report/definition")
+        p.themeColors = themeColors(dir.appendingPathComponent("Report"))
         if let layout = try? Data(contentsOf: dir.appendingPathComponent("Report/Layout")),
            let json = jsonObject(layout) as? [String: Any] {
             p.pages = parseLayout(json)
@@ -149,7 +150,6 @@ enum PowerBIImporter {
             throw ImportError(message: L("Mise en page du rapport introuvable dans « %@ ».", url.lastPathComponent))
         }
         attachImages(&p.pages, resources: dir.appendingPathComponent("Report/StaticResources/RegisteredResources"))
-        p.themeColors = themeColors(dir.appendingPathComponent("Report"))
         addTableQueries(&p)
         return p
     }
@@ -183,6 +183,7 @@ enum PowerBIImporter {
             p.hasModel = false
         }
         let defDir = reportDir.appendingPathComponent("definition")
+        p.themeColors = themeColors(reportDir)
         if FileManager.default.fileExists(atPath: defDir.appendingPathComponent("pages").path) {
             p.pages = parsePBIR(defDir)
             (p.reportFilters, p.bookmarks) = pbirState(defDir)
@@ -194,7 +195,6 @@ enum PowerBIImporter {
             throw ImportError(message: L("Rapport introuvable dans le projet « %@ ».", url.lastPathComponent))
         }
         attachImages(&p.pages, resources: reportDir.appendingPathComponent("StaticResources/RegisteredResources"))
-        p.themeColors = themeColors(reportDir)
         addTableQueries(&p)
         return p
     }
@@ -659,10 +659,26 @@ enum PowerBIImporter {
     }
 
     /// Hex color of a `{"solid": {"color": {"expr": {"Literal": …}}}}` property (theme colors are skipped).
+    /// Theme of the report being read: background, foreground and data colors (Power BI's defaults otherwise).
+    nonisolated(unsafe) static var theme: (background: UInt32, foreground: UInt32, data: [UInt32]) = defaultTheme
+    static let defaultTheme: (background: UInt32, foreground: UInt32, data: [UInt32]) =
+        (0xFFFFFF, 0x252423, [0x118DFF, 0x12239E, 0xE66C37, 0x6B007B, 0xE044A7, 0x744EC2, 0xD9B300, 0xD64550])
+
+    /// Hex color of a `{"solid": {"color": …}}` property: a literal, or a theme color (`ThemeDataColor`: id 0 is the
+    /// background, 1 the foreground, then the data colors; `Percent` lightens or darkens it).
     private static func color(_ v: Any?) -> String? {
-        guard let c = ((v as? [String: Any])?["solid"] as? [String: Any])?["color"],
-              let s = literal(c), s.hasPrefix("#") else { return nil }
-        return String(s.dropFirst()).uppercased()
+        guard let c = ((v as? [String: Any])?["solid"] as? [String: Any])?["color"] else { return nil }
+        if let s = literal(c), s.hasPrefix("#") { return String(s.dropFirst()).uppercased() }
+        guard let t = ((c as? [String: Any])?["expr"] as? [String: Any])?["ThemeDataColor"] as? [String: Any],
+              let id = t["ColorId"] as? Int else { return nil }
+        let base: UInt32 = id == 0 ? theme.background : id == 1 ? theme.foreground
+            : (theme.data.isEmpty ? 0x118DFF : theme.data[(id - 2) % theme.data.count])
+        let p = t["Percent"] as? Double ?? 0
+        func channel(_ shift: UInt32) -> UInt32 {
+            let x = Double((base >> shift) & 0xFF)
+            return UInt32((p >= 0 ? x + (255 - x) * p : x * (1 + p)).rounded().clamped(0, 255)) << shift
+        }
+        return String(format: "%06X", channel(16) | channel(8) | channel(0))
     }
 
     private static func props(_ objects: [String: Any], _ key: String) -> [String: Any] {
@@ -698,6 +714,7 @@ enum PowerBIImporter {
             return c
         case "basicShape", "shape":
             var c = ElementContent.defaults(for: .shape)
+            c.stroke = nil
             let general = props(objects, "general"), fill = props(objects, "fill"), line = props(objects, "line")
             let kind = (literal(general["shapeType"]) ?? literal(props(objects, "shape")["tileShape"]) ?? "").lowercased()
             c.shape = kind.contains("oval") || kind.contains("ellipse") ? .ellipse
@@ -727,6 +744,21 @@ enum PowerBIImporter {
         }
     }
 
+    /// Background of a visual container, when shown (`visualContainerObjects.background` / `vcObjects`).
+    static func containerBackground(_ vco: Any?) -> String? {
+        guard let o = vco as? [String: Any] else { return nil }
+        let b = props(o, "background")
+        guard literal(b["show"]) == "true" else { return nil }
+        return color(b["color"])
+    }
+
+    /// Element settings with the container's background as fill when the element has none.
+    static func element(_ type: String, _ objects: [String: Any], container: Any?) -> ElementContent? {
+        guard var e = element(type, objects) else { return nil }
+        if e.fill == nil, e.imageData == nil, type != "image", let bg = containerBackground(container) { e.fill = bg }
+        return e
+    }
+
     /// Chart formatting of a visual's objects (default values, not per-series ones).
     static func visualFormat(_ objects: [String: Any]) -> VisualFormat? {
         var f = VisualFormat(), set = false
@@ -750,9 +782,13 @@ enum PowerBIImporter {
             if let n = ((config["themeCollection"] as? [String: Any])?["customTheme"] as? [String: Any])?["name"] as? String { name = n; break }
             if let n = d["theme"] as? String { name = n; break }
         }
+        Self.theme = defaultTheme
         guard let name, let data = try? Data(contentsOf: report.appendingPathComponent("StaticResources/RegisteredResources/\(name)")),
-              let theme = jsonObject(data) as? [String: Any], let colors = theme["dataColors"] as? [String] else { return [] }
-        return colors.compactMap { UInt32($0.trimmingCharacters(in: CharacterSet(charactersIn: "#")), radix: 16) }
+              let json = jsonObject(data) as? [String: Any], let colors = json["dataColors"] as? [String] else { return [] }
+        func hex(_ s: Any?) -> UInt32? { (s as? String).flatMap { UInt32($0.trimmingCharacters(in: CharacterSet(charactersIn: "#")), radix: 16) } }
+        let palette = colors.compactMap(hex)
+        Self.theme = (hex(json["background"]) ?? 0xFFFFFF, hex(json["foreground"]) ?? 0x252423, palette)
+        return palette
     }
 
     /// Name of an image visual's registered resource.
@@ -795,7 +831,7 @@ enum PowerBIImporter {
                 let frame = CGRect(x: vc["x"] as? Double ?? 0, y: vc["y"] as? Double ?? 0,
                                    width: vc["width"] as? Double ?? 300, height: vc["height"] as? Double ?? 200)
                 var spec = PBIVisualSpec(type: type, frame: frame, title: title(sv["vcObjects"]))
-                spec.element = element(type, sv["objects"] as? [String: Any] ?? [:])
+                spec.element = element(type, sv["objects"] as? [String: Any] ?? [:], container: sv["vcObjects"])
                 spec.imageName = imageName(sv["objects"] as? [String: Any] ?? [:])
                 spec.pbiName = cfg["name"] as? String ?? ""
                 spec.parentGroup = cfg["parentGroupName"] as? String
@@ -886,7 +922,7 @@ enum PowerBIImporter {
                 let frame = CGRect(x: pos["x"] as? Double ?? 0, y: pos["y"] as? Double ?? 0,
                                    width: pos["width"] as? Double ?? 300, height: pos["height"] as? Double ?? 200)
                 var spec = PBIVisualSpec(type: type, frame: frame, title: title(visual["visualContainerObjects"]))
-                spec.element = element(type, visual["objects"] as? [String: Any] ?? [:])
+                spec.element = element(type, visual["objects"] as? [String: Any] ?? [:], container: visual["visualContainerObjects"])
                 spec.imageName = imageName(visual["objects"] as? [String: Any] ?? [:])
                 spec.pbiName = vj["name"] as? String ?? v
                 spec.parentGroup = vj["parentGroupName"] as? String
@@ -1897,4 +1933,9 @@ extension AppState {
             alertMessage = error.localizedDescription
         }
     }
+}
+
+
+extension Double {
+    func clamped(_ lo: Double, _ hi: Double) -> Double { Swift.min(Swift.max(self, lo), hi) }
 }

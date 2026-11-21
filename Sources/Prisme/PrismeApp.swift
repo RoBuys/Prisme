@@ -134,9 +134,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     win.setFrame(f, display: true)
                 }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                let main = NSApp.windows.first(where: { $0.isVisible })
-                guard let view = (main?.attachedSheet ?? main)?.contentView,
+            // `--snapshot-main`: the main window even when a sheet (an alert) is shown; `--delay <s>`.
+            let delay = args.firstIndex(of: "--delay").flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil } ?? 3
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let main = NSApp.windows.first(where: { $0.isVisible && $0.sheetParent == nil })
+                let target = args.contains("--snapshot-main") ? main : (main?.attachedSheet ?? main)
+                guard let view = target?.contentView,
                       let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
                 view.cacheDisplay(in: view.bounds, to: rep)
                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
