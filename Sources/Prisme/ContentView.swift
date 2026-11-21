@@ -132,8 +132,24 @@ struct RibbonView: View {
     @State private var showVisualPicker = false
     @State private var showBookmarks = false
 
+    /// Full labels when the window is wide enough, icons only (names in tooltips) when it isn't,
+    /// and horizontal scrolling as a last resort — never squeezed or clipped on both sides.
     var body: some View {
-        HStack(spacing: 2) {
+        ViewThatFits(in: .horizontal) {
+            row.fixedSize(horizontal: true, vertical: false)
+            row.environment(\.ribbonCompact, true).fixedSize(horizontal: true, vertical: false)
+            ScrollView(.horizontal, showsIndicators: false) {
+                row.environment(\.ribbonCompact, true).fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+
+    private var row: some View {
+        HStack(alignment: .top, spacing: 2) {
             RibbonGroup(L("Fichier")) {
                 RibbonButton(L("Ouvrir"), "folder") { state.openDocument() }
                 RibbonButton(L("Power BI…"), "square.and.arrow.down.on.square") { state.importPowerBIWithPanel() }
@@ -155,7 +171,7 @@ struct RibbonView: View {
                     .disabled(state.tables.isEmpty)
                 RibbonButton(L("Nouvelle colonne"), "tablecells.badge.ellipsis") { state.newColumn() }
                     .disabled(state.tables.isEmpty)
-                RibbonButton(L("Nouvelle table"), "tablecells.badge.plus") { state.newTable() }
+                RibbonButton(L("Nouvelle table"), "rectangle.stack.badge.plus") { state.newTable() }
                     .disabled(state.tables.isEmpty)
             }
             RibbonDivider()
@@ -203,11 +219,17 @@ struct RibbonView: View {
                 RibbonButton(L("Supprimer"), "trash") { state.deleteVisual() }
                     .disabled(state.selectedVisualID == nil)
             }
-            Spacer()
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.bar)
+    }
+}
+
+private struct RibbonCompactKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    /// Ribbon buttons show their icon only (the window is too narrow for labels).
+    var ribbonCompact: Bool {
+        get { self[RibbonCompactKey.self] }
+        set { self[RibbonCompactKey.self] = newValue }
     }
 }
 
@@ -222,25 +244,27 @@ struct RibbonGroup<Content: View>: View {
     var body: some View {
         VStack(spacing: 2) {
             HStack(spacing: 2) { content }
-            Text(title).font(.system(size: 9)).foregroundStyle(.tertiary)
+            Text(title).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
         }
     }
 }
 
 struct RibbonDivider: View {
-    var body: some View { Divider().frame(height: 52).padding(.horizontal, 6) }
+    @Environment(\.ribbonCompact) private var compact
+    var body: some View { Divider().frame(height: compact ? 40 : 52).padding(.horizontal, compact ? 4 : 6) }
 }
 
 struct RibbonLabel: View {
     let title: String
     let symbol: String
+    @Environment(\.ribbonCompact) private var compact
     var body: some View {
         VStack(spacing: 3) {
             Image(systemName: symbol).font(.system(size: 18)).frame(height: 22)
-            Text(title).font(.system(size: 10.5)).lineLimit(1)
+            if !compact { Text(title).font(.system(size: 10.5)).lineLimit(1).fixedSize() }
         }
-        .frame(minWidth: 64)
-        .padding(.horizontal, 4)
+        .frame(minWidth: compact ? 30 : 50)
+        .padding(.horizontal, compact ? 2 : 3)
         .contentShape(Rectangle())
     }
 }
@@ -267,6 +291,7 @@ struct RibbonButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(enabled ? .primary : .tertiary)
         .onHover { hover = $0 }
+        .help(title)
     }
 }
 

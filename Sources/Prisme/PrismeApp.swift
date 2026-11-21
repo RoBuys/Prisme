@@ -125,6 +125,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count {
             let path = args[i + 1]
+            // `--width <points>`: resizes the window first (to check the layout at a given size).
+            if let w = args.firstIndex(of: "--width").flatMap({ $0 + 1 < args.count ? Double(args[$0 + 1]) : nil }) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    guard let win = NSApp.windows.first(where: { $0.isVisible }) else { return }
+                    var f = win.frame
+                    f.size.width = w
+                    win.setFrame(f, display: true)
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 let main = NSApp.windows.first(where: { $0.isVisible })
                 guard let view = (main?.attachedSheet ?? main)?.contentView,
