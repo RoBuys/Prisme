@@ -69,6 +69,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             RibbonView()
             Divider()
+            RoleBanner()
             HStack(spacing: 0) {
                 ModeRail()
                 Divider()
@@ -112,6 +113,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: Binding(get: { state.showGetData }, set: { state.showGetData = $0 })) {
             GetDataView().environment(state)
+        }
+        .sheet(isPresented: Binding(get: { state.showRoles }, set: { state.showRoles = $0 })) {
+            RolesSheet().environment(state)
         }
         .sheet(isPresented: Binding(get: { state.credentialsTable != nil }, set: { if !$0 { state.credentialsTable = nil } })) {
             if let t = state.credentialsTable { CredentialsSheet(table: t).environment(state) }
@@ -205,6 +209,23 @@ struct RibbonView: View {
             RibbonGroup(L("Affichage")) {
                 RibbonButton(L("Signets"), "bookmark") { showBookmarks.toggle() }
                     .popover(isPresented: $showBookmarks, arrowEdge: .bottom) { BookmarksPopover() }
+                Menu {
+                    Button(L("Aucun rôle")) { state.viewAsRole = nil }
+                    if !state.roles.isEmpty { Divider() }
+                    ForEach(state.roles) { r in
+                        Button { state.viewAsRole = r.name } label: {
+                            if state.viewAsRole == r.name { Label(r.name, systemImage: "checkmark") } else { Text(r.name) }
+                        }
+                    }
+                    Divider()
+                    Button(L("Gérer les rôles…")) { state.showRoles = true }
+                } label: {
+                    RibbonLabel(title: L("Rôles"), symbol: "person.badge.shield.checkmark")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(L("Afficher le rapport en tant que rôle (sécurité au niveau des lignes)"))
             }
             .disabled(state.mode != .report)
             RibbonDivider()

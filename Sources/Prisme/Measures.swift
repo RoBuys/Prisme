@@ -245,9 +245,27 @@ private struct Parser {
         case .lparen:
             advance()
             let e = try parseOr()
+            if current == .comma {
+                // (a, b, …): a row of a table constructor.
+                var items = [e]
+                while current == .comma { advance(); items.append(try parseOr()) }
+                guard current == .rparen else { throw MeasureError(message: L("Parenthèse fermante manquante.")) }
+                advance()
+                return .call("__ROW", items)
+            }
             guard current == .rparen else { throw MeasureError(message: L("Parenthèse fermante manquante.")) }
             advance()
             return e
+        case .op("{"):
+            // { 1, 2 } or { ("a", 1), ("b", 2) }: a table.
+            advance()
+            var rows: [Expr] = []
+            while current != .op("}") {
+                rows.append(try parseOr())
+                if current == .comma { advance() } else if current != .op("}") { throw MeasureError(message: L("« } » attendu.")) }
+            }
+            advance()
+            return .call("__TABLE", rows)
         case .quoted(let t):
             advance()
             if case .bracket(let n) = current { advance(); return .ref(table: t, name: n) }
@@ -331,11 +349,18 @@ enum MeasureCompiler {
         "CALCULATETABLE": 1...20, "DISTINCT": 1...1,
         "CONTAINSSTRING": 2...2, "UNICHAR": 1...1, "IFERROR": 2...2, "ISEMPTY": 1...1, "WEEKDAY": 1...2,
         "DISTINCTCOUNTNOBLANK": 1...1, "CALENDAR": 2...2, "CALENDARAUTO": 0...1, "GENERATESERIES": 2...3,
+        "CROSSJOIN": 2...10, "UNION": 2...10, "GENERATE": 2...2, "GENERATEALL": 2...2, "GROUPBY": 1...41, "CURRENTGROUP": 0...0,
+        "__TABLE": 0...100_000, "__ROW": 1...100, "NAMEOF": 1...1, "SELECTEDMEASURE": 0...0, "SELECTEDMEASURENAME": 0...0,
+        "SELECTEDMEASUREFORMATSTRING": 0...0, "ISSELECTEDMEASURE": 1...20, "USERNAME": 0...0, "USERPRINCIPALNAME": 0...0,
+        "USEROBJECTID": 0...0, "CUSTOMDATA": 0...0,
+        "DATESBETWEEN": 3...3, "DATESINPERIOD": 4...4, "PARALLELPERIOD": 3...3, "PREVIOUSQUARTER": 1...1, "PREVIOUSDAY": 1...1,
+        "NEXTDAY": 1...1, "NEXTMONTH": 1...1, "NEXTQUARTER": 1...1, "NEXTYEAR": 1...1,
     ]
     /// Functions that return a table.
     static let tableFunctions: Set<String> = ["FILTER", "VALUES", "DISTINCT", "TOPN", "SUMMARIZE", "SUMMARIZECOLUMNS",
                                               "ADDCOLUMNS", "SELECTCOLUMNS", "CALCULATETABLE", "CALENDAR", "CALENDARAUTO",
-                                              "GENERATESERIES"]
+                                              "GENERATESERIES", "CROSSJOIN", "UNION", "GENERATE", "GENERATEALL", "GROUPBY",
+                                              "CURRENTGROUP", "__TABLE"]
     /// Tables that aren't model tables: one generated column.
     static let generatedTables: [String: String] = ["CALENDAR": "Date", "CALENDARAUTO": "Date", "GENERATESERIES": "Value"]
 
@@ -400,6 +425,14 @@ enum MeasureCompiler {
         guard case .call(let f, let a) = e, !a.isEmpty else { return [] }
         var out: Set<String> = []
         switch f {
+        case "__TABLE":
+            let width: Int = { if case .call("__ROW", let r) = a[0] { return r.count }; return 1 }()
+            return Set((width == 1 ? ["value"] : (1...width).map { "value\($0)" }).map { "[" + $0 + "]" })
+        case "CROSSJOIN", "UNION": return a.reduce(Set<String>()) { $0.union(virtualColumns($1)) }
+        case "GENERATE", "GENERATEALL": return virtualColumns(a[0]).union(virtualColumns(a[1]))
+        case "GROUPBY":
+            out = virtualColumns(a[0])
+            for x in a.dropFirst() { if case .string(let n) = x { out.insert("[" + n.lowercased() + "]") } }
         case "ADDCOLUMNS", "SELECTCOLUMNS", "SUMMARIZE":
             out = virtualColumns(a[0])
             for x in a.dropFirst() { if case .string(let n) = x { out.insert("[" + n.lowercased() + "]") } }
@@ -433,7 +466,8 @@ enum MeasureCompiler {
     static let iterators: Set<String> = ["SUMX", "AVERAGEX", "MINX", "MAXX", "COUNTX", "COUNTAX"]
     /// Time-intelligence filters, valid as CALCULATE arguments.
     static let dateFilters: Set<String> = ["DATESYTD", "DATESMTD", "DATESQTD", "SAMEPERIODLASTYEAR", "DATEADD",
-                                           "PREVIOUSMONTH", "PREVIOUSYEAR"]
+                                           "PREVIOUSMONTH", "PREVIOUSYEAR", "DATESBETWEEN", "DATESINPERIOD", "PARALLELPERIOD",
+                                           "PREVIOUSQUARTER", "PREVIOUSDAY", "NEXTDAY", "NEXTMONTH", "NEXTQUARTER", "NEXTYEAR"]
     static let dateUnits: Set<String> = ["YEAR", "QUARTER", "MONTH", "DAY"]
     static let diffUnits: Set<String> = ["YEAR", "QUARTER", "MONTH", "WEEK", "DAY", "HOUR", "MINUTE", "SECOND"]
 
@@ -528,6 +562,21 @@ enum MeasureCompiler {
             case .call(let g, let a) where (g == "ADDCOLUMNS" || g == "SELECTCOLUMNS") && a.count >= 3:
                 try tableArg(a[0], g)
                 try pairs(a, from: 1, g, extra: virtualColumns(a[0]))
+            case .call("__TABLE", let a):
+                for r in a { if case .call("__ROW", let items) = r { try items.forEach(sub) } else { try sub(r) } }
+            case .call("CURRENTGROUP", _):
+                return
+            case .call(let g, let a) where (g == "CROSSJOIN" || g == "UNION") && a.count >= 2:
+                for t in a { try tableArg(t, g) }
+            case .call(let g, let a) where (g == "GENERATE" || g == "GENERATEALL") && a.count == 2:
+                try tableArg(a[0], g)
+                try check(.call("COUNTROWS", [a[1]]), home: home, m, visiting: visiting, inCalculateFilter: false,
+                          vars: vars.union(virtualColumns(a[0])))
+            case .call("GROUPBY", let a) where !a.isEmpty:
+                try tableArg(a[0], "GROUPBY")
+                var i = 1
+                while i < a.count, case .ref = a[i] { try columnArg(a[i], "GROUPBY"); i += 1 }
+                try pairs(a, from: i, "GROUPBY", extra: virtualColumns(a[0]))
             case .call("SUMMARIZE", let a) where !a.isEmpty:
                 try tableArg(a[0], "SUMMARIZE")
                 var i = 1
@@ -622,6 +671,14 @@ enum MeasureCompiler {
                 return
             }
             if f == "COUNTROWS" || f == "ISEMPTY" { try tableArg(args[0], f); return }
+            if f == "NAMEOF" || f == "ISSELECTEDMEASURE" {
+                for a in args {
+                    guard case .ref(let t, let n) = a, resolve(table: t, name: n, home: home, m) != nil else {
+                        throw MeasureError(message: L("%@ attend une colonne ou une mesure.", f))
+                    }
+                }
+                return
+            }
             if f == "VALUES" || f == "TOPN" || (tableFunctions.contains(f) && f != "FILTER") {
                 throw MeasureError(message: L("%@ renvoie une table : utilisez-le dans COUNTROWS, SUMX, RANKX ou CALCULATE.", f))
             }
@@ -670,10 +727,11 @@ enum MeasureCompiler {
             if dateFilters.contains(f) {
                 guard inCalculateFilter else { throw MeasureError(message: L("%@ ne peut être utilisé que comme filtre de CALCULATE.", f)) }
                 try columnArg(args[0], f)
-                if f == "DATEADD" {
-                    try sub(args[1])
-                    guard case .table(let u) = args[2], dateUnits.contains(u.uppercased()) else {
-                        throw MeasureError(message: L("DATEADD attend une unité : YEAR, QUARTER, MONTH ou DAY."))
+                let unitIndex = ["DATEADD": 2, "PARALLELPERIOD": 2, "DATESINPERIOD": 3][f]
+                for (i, a) in args.enumerated().dropFirst() where i != unitIndex { try sub(a) }
+                if let ui = unitIndex {
+                    guard case .table(let u) = args[ui], dateUnits.contains(u.uppercased()) else {
+                        throw MeasureError(message: L("%@ attend une unité : YEAR, QUARTER, MONTH ou DAY.", f))
                     }
                 }
                 return
@@ -845,6 +903,68 @@ final class MeasureEvaluator {
     /// VAR scopes (innermost last), for scalar and table variables.
     private var scopes: [[String: MValue]] = []
     private var tableScopes: [[String: TableRows]] = []
+    /// GROUPBY's current group (CURRENTGROUP()), and the measures calculation items apply to (SELECTEDMEASURE()).
+    private var currentGroups: [TableRows] = []
+    private var selectedMeasures: [Measure] = []
+    /// User returned by USERNAME() / USERPRINCIPALNAME() ("View as" a role).
+    nonisolated(unsafe) static var currentUser = ""
+
+    /// Evaluates a measure's expression (a calculation group item applies when one is selected in the filters).
+    private func measure(_ me: Measure, _ inner: Expr, rows: [Int], filters: [FilterSpec], depth: Int) throws -> MValue {
+        if let (item, rest) = calculationItem(filters) {
+            selectedMeasures.append(me)
+            defer { selectedMeasures.removeLast() }
+            guard case .success(let e) = MeasureCompiler.parse(item.expression) else { return .blank }
+            return try eval(e, home: me.table, rows: rows, filters: rest, row: nil, depth: depth + 1)
+        }
+        return try eval(inner, home: me.table, rows: rows, filters: filters, row: nil, depth: depth + 1)
+    }
+
+    /// The calculation item selected by a filter on a calculation group (exactly one value), and the other filters.
+    private func calculationItem(_ filters: [FilterSpec]) -> (CalculationItem, [FilterSpec])? {
+        for (i, f) in filters.enumerated() where f.allowed.count == 1 {
+            guard let t = model.table(f.field.table), let items = t.calculationItems, !items.isEmpty,
+                  let item = items.first(where: { $0.name == f.allowed.first }) else { continue }
+            var rest = filters
+            rest.remove(at: i)
+            rest.removeAll { $0.field.table == f.field.table }
+            return (item, rest)
+        }
+        return nil
+    }
+
+    /// Rows of a table expression as values (column names, qualified "table[column]" names too) and the filters
+    /// standing for each row (context transition).
+    private func materialize(_ t: TableRows) throws -> (names: [String], rows: [(values: [String: MValue], transitions: [FilterSpec])]) {
+        if t.table.isEmpty {
+            return (t.extraNames, t.rows.map { (t.extras?[$0] ?? [:], t.transitions?[$0] ?? []) })
+        }
+        guard let tbl = model.table(t.table) else { return ([], []) }
+        let fields: [FieldRef] = t.groupBy ?? (t.selectOnly ? [] : tbl.columns.map { FieldRef(table: tbl.name, column: $0.name) })
+        var names = fields.map(\.column)
+        for n in t.extraNames where !names.contains(n) { names.append(n) }
+        let rows = try t.rows.map { r -> ([String: MValue], [FilterSpec]) in
+            let rc = rowContext(t, r)
+            var values = rc.values
+            for f in fields {
+                let v = try cellValue(f, rc)
+                values[f.column.lowercased()] = v
+                values[(f.table + "[" + f.column + "]").lowercased()] = v
+            }
+            let tr = rc.transitions.isEmpty ? [FilterSpec(field: FieldRef(table: tbl.name, column: ""), allowed: [], rowSet: [r])] : rc.transitions
+            return (values, tr)
+        }
+        return (names, rows)
+    }
+
+    /// A table that isn't in the model, made of values (and the filters each row stands for).
+    private func virtualTable(_ names: [String], _ rows: [(values: [String: MValue], transitions: [FilterSpec])],
+                              filters: [FilterSpec]) -> TableRows {
+        TableRows(table: "", rows: Array(rows.indices), baseRows: [], filters: filters,
+                  transitions: Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($0.offset, $0.element.transitions) }),
+                  extras: Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($0.offset, $0.element.values) }),
+                  extraNames: names, selectOnly: true)
+    }
 
     private func tableVar(_ name: String) -> TableRows? {
         for scope in tableScopes.reversed() { if let t = scope[name.lowercased()] { return t } }
@@ -858,13 +978,13 @@ final class MeasureEvaluator {
 
     func evaluate(_ me: Measure, rows: [Int], filters: [FilterSpec]) -> Double? {
         guard case .success(let e) = MeasureCompiler.parse(me.expression) else { return nil }
-        return (try? eval(e, home: me.table, rows: rows, filters: filters, row: nil, depth: 0))?.number
+        return (try? measure(me, e, rows: rows, filters: filters, depth: 0))?.number
     }
 
     /// Any value (text included) of a measure, for previews.
     func evaluateValue(_ me: Measure, rows: [Int], filters: [FilterSpec]) throws -> MValue {
         guard case .success(let e) = MeasureCompiler.parse(me.expression) else { return .blank }
-        return try eval(e, home: me.table, rows: rows, filters: filters, row: nil, depth: 0)
+        return try measure(me, e, rows: rows, filters: filters, depth: 0)
     }
 
     private lazy var allBaseRows = sharedAllRows ?? Array(ctx.base.rows.indices)
@@ -939,7 +1059,10 @@ final class MeasureEvaluator {
             }
             return try eval(body, home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
         case .ref(let t, let n):
-            if let r = row, !r.values.isEmpty, let v = r.values[n.lowercased()] { return v }
+            if let r = row, !r.values.isEmpty {
+                if let t, let v = r.values[(t + "[" + n + "]").lowercased()] { return v }
+                if let v = r.values[n.lowercased()] { return v }
+            }
             switch resolve(t, n, home) {
             case .measure(let me):
                 guard case .success(let inner) = MeasureCompiler.parse(me.expression) else { return .blank }
@@ -947,9 +1070,10 @@ final class MeasureEvaluator {
                     // Context transition: the measure sees only the current row.
                     let t = rc.transitions.isEmpty ? [FilterSpec(field: FieldRef(table: rc.table, column: ""), allowed: [], rowSet: [rc.row])] : rc.transitions
                     let f = (rc.filters.isEmpty ? filters : rc.filters) + t
-                    return try eval(inner, home: me.table, rows: rc.baseRows, filters: f, row: nil, depth: depth + 1)
+                    // Rows of a virtual table (CROSSJOIN, GENERATE…) stand for their filters only.
+                    return try measure(me, inner, rows: rc.table.isEmpty ? self.rows(for: f) : rc.baseRows, filters: f, depth: depth + 1)
                 }
-                return try eval(inner, home: me.table, rows: rows, filters: filters, row: nil, depth: depth + 1)
+                return try measure(me, inner, rows: rows, filters: filters, depth: depth + 1)
             case .column(let f):
                 guard let rc = row else { throw MeasureError(message: L("Une colonne doit être agrégée (SUM, AVERAGE…).")) }
                 return try cellValue(f, rc)
@@ -1129,7 +1253,8 @@ final class MeasureEvaluator {
 
     /// SUMMARIZE: one row per distinct combination of the group columns; added columns are evaluated in each
     /// group's filter context.
-    private func summarize(_ src: TableRows, by columns: [FieldRef], pairs: [(String, Expr)], home: String, depth: Int) throws -> TableRows {
+    private func summarize(_ src: TableRows, by columns: [FieldRef], pairs: [(String, Expr)], home: String, depth: Int,
+                           currentGroup: Bool = false) throws -> TableRows {
         let cols = columns.map(canonical)
         var reps: [String: Int] = [:]
         var order: [Int] = []
@@ -1153,9 +1278,19 @@ final class MeasureEvaluator {
         var extras: [Int: [String: MValue]] = [:]
         for r in order {
             var values: [String: MValue] = [:]
-            for (n, x) in pairs {
-                values[n.lowercased()] = try eval(x, home: home, rows: groups[r] ?? [], filters: src.filters + (transitions[r] ?? []),
-                                                  row: nil, depth: depth + 1)
+            if currentGroup {
+                // GROUPBY: expressions iterate CURRENTGROUP(), without changing the filter context.
+                currentGroups.append(TableRows(table: src.table, rows: sources[r] ?? [], baseRows: groups[r] ?? [], filters: src.filters,
+                                               extras: src.extras))
+                defer { currentGroups.removeLast() }
+                for (n, x) in pairs {
+                    values[n.lowercased()] = try eval(x, home: home, rows: groups[r] ?? [], filters: src.filters, row: nil, depth: depth + 1)
+                }
+            } else {
+                for (n, x) in pairs {
+                    values[n.lowercased()] = try eval(x, home: home, rows: groups[r] ?? [], filters: src.filters + (transitions[r] ?? []),
+                                                      row: nil, depth: depth + 1)
+                }
             }
             extras[r] = values
         }
@@ -1264,6 +1399,64 @@ final class MeasureEvaluator {
                 t.extraNames += pairs.map(\.0)
             }
             return t
+        case .call("__TABLE", let a):
+            let width: Int = { if case .call("__ROW", let r) = a.first { return r.count }; return 1 }()
+            let names = width == 1 ? ["Value"] : (1...width).map { "Value\($0)" }
+            let out = try a.map { item -> ([String: MValue], [FilterSpec]) in
+                let items: [Expr] = { if case .call("__ROW", let r) = item { return r }; return [item] }()
+                var values: [String: MValue] = [:]
+                for (k, x) in items.enumerated() where k < names.count {
+                    values[names[k].lowercased()] = try eval(x, home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+                }
+                return (values, [])
+            }
+            return virtualTable(names, out, filters: filters)
+        case .call("CROSSJOIN", let a) where a.count >= 2:
+            var acc = try materialize(try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1))
+            for x in a.dropFirst() {
+                let m = try materialize(try tableRows(x, home: home, rows: rows, filters: filters, row: row, depth: depth + 1))
+                guard acc.rows.count * m.rows.count <= 2_000_000 else { throw MeasureError(message: L("CROSSJOIN : résultat trop grand.")) }
+                var combined: [([String: MValue], [FilterSpec])] = []
+                for l in acc.rows { for r in m.rows { combined.append((l.values.merging(r.values) { a, _ in a }, l.transitions + r.transitions)) } }
+                acc = (acc.names + m.names.filter { !acc.names.contains($0) }, combined)
+            }
+            return virtualTable(acc.names, acc.rows, filters: filters)
+        case .call("UNION", let a) where a.count >= 2:
+            let first = try materialize(try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1))
+            var out = first.rows
+            for x in a.dropFirst() {
+                // Columns match by position, named after the first table.
+                let m = try materialize(try tableRows(x, home: home, rows: rows, filters: filters, row: row, depth: depth + 1))
+                for r in m.rows {
+                    var values: [String: MValue] = [:]
+                    for (k, n) in first.names.enumerated() where k < m.names.count { values[n.lowercased()] = r.values[m.names[k].lowercased()] ?? .blank }
+                    out.append((values, r.transitions))
+                }
+            }
+            return virtualTable(first.names, out, filters: filters)
+        case .call(let g, let a) where (g == "GENERATE" || g == "GENERATEALL") && a.count == 2:
+            let t1 = try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+            let m1 = try materialize(t1)
+            var names = m1.names
+            var out: [([String: MValue], [FilterSpec])] = []
+            for (k, r) in t1.rows.enumerated() {
+                let rc = rowContext(t1, r)
+                let t2 = try tableRows(a[1], home: home, rows: rows, filters: filters, row: rc, depth: depth + 1)
+                let m2 = try materialize(t2)
+                for n in m2.names where !names.contains(n) { names.append(n) }
+                if m2.rows.isEmpty, g == "GENERATEALL" { out.append(m1.rows[k]) }
+                for r2 in m2.rows { out.append((m1.rows[k].values.merging(r2.values) { a, _ in a }, m1.rows[k].transitions + r2.transitions)) }
+            }
+            return virtualTable(names, out, filters: filters)
+        case .call("GROUPBY", let a) where !a.isEmpty:
+            let src = try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+            var i = 1
+            var cols: [FieldRef] = []
+            while i < a.count, case .ref = a[i] { cols.append(try column(a[i], home: home)); i += 1 }
+            return try summarize(src, by: cols, pairs: namedPairs(a, from: i), home: home, depth: depth, currentGroup: true)
+        case .call("CURRENTGROUP", _):
+            guard let g = currentGroups.last else { throw MeasureError(message: L("CURRENTGROUP() s'utilise dans GROUPBY.")) }
+            return g
         case .call("SUMMARIZE", let a) where !a.isEmpty:
             let src = try tableRows(a[0], home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
             var i = 1
@@ -1362,6 +1555,16 @@ final class MeasureEvaluator {
         }
 
         func calculate(_ expr: Expr, _ filterArgs: [Expr]) throws -> MValue {
+            // In a row context, CALCULATE first turns the current row into filters (context transition);
+            // filter arguments are still evaluated in the row context.
+            var cf = filters, cr = rows
+            if let rc = row {
+                let t = rc.transitions.isEmpty
+                    ? (rc.table.isEmpty ? [] : [FilterSpec(field: FieldRef(table: rc.table, column: ""), allowed: [], rowSet: [rc.row])])
+                    : rc.transitions
+                cf = (rc.filters.isEmpty ? filters : rc.filters) + t
+                cr = rc.table.isEmpty ? self.rows(for: cf) : rc.baseRows
+            }
             let useRel = filterArgs.compactMap { a -> (FieldRef, FieldRef)? in
                 guard case .call("USERELATIONSHIP", let k) = a, k.count == 2,
                       let x = try? column(k[0], home: home), let y = try? column(k[1], home: home) else { return nil }
@@ -1385,13 +1588,13 @@ final class MeasureEvaluator {
                 child.scopes = scopes
                 child.tableScopes = tableScopes
                 let rest = filterArgs.filter { if case .call("USERELATIONSHIP", _) = $0 { return false }; return true }
-                return try child.call("CALCULATE", [expr] + rest, home: home, rows: child.rows(for: filters), filters: filters,
+                return try child.call("CALCULATE", [expr] + rest, home: home, rows: child.rows(for: cf), filters: cf,
                                       row: nil, depth: depth + 1)
             }
-            let newFilters = try contextFilters(filterArgs, home: home, rows: rows, filters: filters, row: row, depth: depth)
+            let newFilters = try contextFilters(filterArgs, home: home, rows: cr, filters: cf, row: row, depth: depth)
             // Filters only added (none removed or replaced): narrow the current rows instead of scanning the table.
-            let onlyAdded = !filterArgs.contains(where: isModifierArg) && newFilters.count == filters.count + filterArgs.count
-            let newRows = onlyAdded ? ctx.rowIndices(Array(newFilters.suffix(filterArgs.count)), within: rows) : self.rows(for: newFilters)
+            let onlyAdded = !filterArgs.contains(where: isModifierArg) && newFilters.count == cf.count + filterArgs.count
+            let newRows = onlyAdded ? ctx.rowIndices(Array(newFilters.suffix(filterArgs.count)), within: cr) : self.rows(for: newFilters)
             return try eval(expr, home: home, rows: newRows, filters: newFilters, row: nil, depth: depth + 1)
         }
 
@@ -1630,6 +1833,26 @@ final class MeasureEvaluator {
             default: return .number(Double(sundayFirst))
             }
         case "DISTINCTCOUNTNOBLANK": return try aggregate(.distinctCount)
+        case "NAMEOF":
+            guard case .ref(let t, let n) = args[0] else { return .blank }
+            switch resolve(t, n, home) {
+            case .measure(let me): return .text("'\(me.table)'[\(me.name)]")
+            case .column(let f): return .text("'\(f.table)'[\(f.column)]")
+            case nil: return .blank
+            }
+        case "SELECTEDMEASURE":
+            guard let me = selectedMeasures.last, case .success(let e) = MeasureCompiler.parse(me.expression) else { return .blank }
+            return try eval(e, home: me.table, rows: rows, filters: filters, row: nil, depth: depth + 1)
+        case "SELECTEDMEASURENAME": return selectedMeasures.last.map { .text($0.name) } ?? .blank
+        case "SELECTEDMEASUREFORMATSTRING": return .blank
+        case "ISSELECTEDMEASURE":
+            guard let me = selectedMeasures.last else { return .bool(false) }
+            return .bool(args.contains { a in
+                if case .ref(let t, let n) = a, case .measure(let m) = resolve(t, n, home) { return m.name == me.name && m.table == me.table }
+                return false
+            })
+        case "USERNAME", "USERPRINCIPALNAME", "USEROBJECTID": return .text(Self.currentUser)
+        case "CUSTOMDATA": return .blank
         case "CALCULATE":
             return try calculate(args[0], Array(args.dropFirst()))
         case "TOTALYTD", "TOTALMTD", "TOTALQTD":
@@ -1709,6 +1932,30 @@ final class MeasureEvaluator {
             let fr = try column(args[0], home: home)
             let dates = (ctx.values(fr, rows) ?? []).compactMap(\.date)
             let others = current.filter { $0.field.columnKey != fr.columnKey }
+            if g == "DATESBETWEEN" || g == "DATESINPERIOD" {
+                // Bounds given by the arguments, not by the current dates (blank = the column's first or last date).
+                let cal = Fmt.calendar
+                func dateArg(_ e: Expr) throws -> Date? {
+                    let v = try eval(e, home: home, rows: rows, filters: filters, row: row, depth: depth + 1)
+                    if case .date(let d) = v { return d }
+                    return v.number.map { Date(timeIntervalSince1970: $0) }
+                }
+                let all = model.table(fr.table).flatMap { t in t.columnIndex(fr.column).map { i in t.rows.compactMap { $0[i].date } } } ?? []
+                var from = all.min() ?? .distantPast, to = (all.max() ?? .distantFuture).addingTimeInterval(86_399)
+                if g == "DATESBETWEEN" {
+                    if let a = try dateArg(args[1]) { from = cal.startOfDay(for: a) }
+                    if let b = try dateArg(args[2]) { to = cal.startOfDay(for: b).addingTimeInterval(86_399) }
+                } else {
+                    guard let start = try dateArg(args[1]).map({ cal.startOfDay(for: $0) }) else { return others }
+                    let n = Int(try eval(args[2], home: home, rows: rows, filters: filters, row: row, depth: depth + 1).number ?? 0)
+                    guard case .table(let u) = args[3] else { return current }
+                    let unit: Calendar.Component = ["YEAR": .year, "QUARTER": .month, "MONTH": .month][u.uppercased()] ?? .day
+                    let end = cal.date(byAdding: unit, value: u.uppercased() == "QUARTER" ? 3 * n : n, to: start) ?? start
+                    if n >= 0 { from = start; to = end.addingTimeInterval(-1) } else { from = end.addingTimeInterval(86_400); to = start.addingTimeInterval(86_399) }
+                }
+                return others + [FilterSpec(field: FieldRef(table: fr.table, column: fr.column), allowed: [],
+                                            range: from.timeIntervalSince1970...max(from, to).timeIntervalSince1970)]
+            }
             guard let lo = dates.min(), let hi = dates.max() else {
                 return others + [FilterSpec(field: FieldRef(table: fr.table, column: ""), allowed: [], rowSet: [])]
             }
@@ -1751,6 +1998,32 @@ final class MeasureEvaluator {
             case "PREVIOUSYEAR":
                 let y = start([.year], lo)
                 from = add(.year, -1, y); to = y.addingTimeInterval(-1)
+            case "PREVIOUSQUARTER":
+                let q = quarterStart(lo)
+                from = add(.month, -3, q); to = q.addingTimeInterval(-1)
+            case "PREVIOUSDAY":
+                let d = cal.startOfDay(for: lo)
+                from = add(.day, -1, d); to = d.addingTimeInterval(-1)
+            case "NEXTDAY":
+                from = add(.day, 1, cal.startOfDay(for: hi)); to = from.addingTimeInterval(endOfDay)
+            case "NEXTMONTH":
+                let m = start([.year, .month], hi)
+                from = add(.month, 1, m); to = add(.month, 2, m).addingTimeInterval(-1)
+            case "NEXTQUARTER":
+                let q = quarterStart(hi)
+                from = add(.month, 3, q); to = add(.month, 6, q).addingTimeInterval(-1)
+            case "NEXTYEAR":
+                let y = start([.year], hi)
+                from = add(.year, 1, y); to = add(.year, 2, y).addingTimeInterval(-1)
+            case "PARALLELPERIOD":
+                // Whole periods, shifted.
+                let n = Int(try eval(args[1], home: home, rows: rows, filters: filters, row: row, depth: depth + 1).number ?? 0)
+                guard case .table(let u) = args[2] else { return current }
+                switch u.uppercased() {
+                case "YEAR": from = add(.year, n, start([.year], lo)); to = add(.year, n + 1, start([.year], hi)).addingTimeInterval(-1)
+                case "QUARTER": from = add(.month, 3 * n, quarterStart(lo)); to = add(.month, 3 * n + 3, quarterStart(hi)).addingTimeInterval(-1)
+                default: from = add(.month, n, start([.year, .month], lo)); to = add(.month, n + 1, start([.year, .month], hi)).addingTimeInterval(-1)
+                }
             default: break
             }
             return others + [FilterSpec(field: FieldRef(table: fr.table, column: fr.column), allowed: [],

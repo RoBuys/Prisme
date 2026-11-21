@@ -605,6 +605,9 @@ enum Engine {
     static func context(for fields: [FieldRef], _ m: DataModel) -> QueryContext? {
         var used: [String] = []
         for f in fields where !used.contains(f.table) && m.table(f.table) != nil { used.append(f.table) }
+        // Tables linked to nothing (calculation groups, what-if parameters) don't drive the query.
+        let linked = used.filter { t in m.relationships.contains { $0.isActive && $0.involves(t) } }
+        if !linked.isEmpty && linked.count < used.count { used = linked }
         guard let first = used.first else { return nil }
         let need = Set(used)
         func reach(_ t: String) -> Set<String> { Set(m.reachable(from: t).map(\.table)) }
@@ -685,7 +688,9 @@ enum Engine {
         let evaluator = MeasureEvaluator(ctx: ctx, model: m)
         let axisLabel = v.type.isPie ? L("Légende") : L("Axe")
         let filters = filters + v.drillFilters
-        guard let ax = v.axisField, let axisValue = ctx.accessor(ax) else {
+        guard let ax = v.axisField else { return ChartData(message: L("Ajoutez un champ dans « %@ »", axisLabel)) }
+        let axisAccessor = ctx.accessor(ax), axisKeys = axisAccessor == nil ? disconnectedKeys(ax, ctx, m) : nil
+        guard axisAccessor != nil || axisKeys != nil else {
             return ChartData(message: L("Ajoutez un champ dans « %@ »", axisLabel))
         }
         var vals = v.values.compactMap { vf in valueFunction(vf, ctx, evaluator).map { (vf, $0) } }
@@ -693,9 +698,15 @@ enum Engine {
 
         var legendField: FieldRef?
         var legendValue: ((Int) -> CellValue)?
+        var legendKeys: [GroupKey]?
         if v.type.isCartesian, let l = v.legend, let a = ctx.accessor(l) {
             legendField = l
             legendValue = a
+            vals = [vals[0]]
+        } else if v.type.isCartesian, let l = v.legend, let keys = disconnectedKeys(l, ctx, m) {
+            legendField = l
+            legendKeys = keys
+            legendValue = { _ in .empty }
             vals = [vals[0]]
         }
         if v.type.isPie { vals = [vals[0]] }
@@ -703,9 +714,11 @@ enum Engine {
         struct Key: Hashable { let cat: GroupKey; let ser: GroupKey? }
         var groups: [Key: [Int]] = [:]
         let axisMemo = GroupKey.Memo(ax.dateLevel), legendMemo = GroupKey.Memo(legendField?.dateLevel)
-        for r in ctx.rowIndices(filters) {
-            let k = Key(cat: axisMemo.key(axisValue(r)), ser: legendValue.map { legendMemo.key($0(r)) })
-            groups[k, default: []].append(r)
+        let filtered = ctx.rowIndices(filters)
+        for r in filtered {
+            let cats = axisKeys ?? [axisMemo.key(axisAccessor!(r))]
+            let sers: [GroupKey?] = legendKeys ?? [legendValue.map { legendMemo.key($0(r)) }]
+            for c in cats { for s in sers { groups[Key(cat: c, ser: s), default: []].append(r) } }
         }
         guard !groups.isEmpty else { return ChartData(message: L("Aucune donnée pour ces filtres")) }
 
@@ -721,8 +734,10 @@ enum Engine {
         var cats = Array(totals.keys)
         let isTrend = v.type == .line || v.type == .area
         var mode = v.fmt.sort
-        if mode == .auto { mode = m.column(ax)?.type == .text && !isTrend ? .valueDesc : .categoryAsc }
+        if mode == .auto && axisKeys == nil { mode = m.column(ax)?.type == .text && !isTrend ? .valueDesc : .categoryAsc }
+        if let axisKeys, mode == .categoryAsc || mode == .auto { cats = axisKeys.filter { totals[$0] != nil }; mode = .auto }
         switch mode {
+        case .auto where axisKeys != nil: break
         case .valueDesc: cats.sort { (totals[$0] ?? 0) > (totals[$1] ?? 0) }
         case .valueAsc: cats.sort { (totals[$0] ?? 0) < (totals[$1] ?? 0) }
         case .categoryDesc: cats.sort(by: >)
@@ -737,7 +752,7 @@ enum Engine {
         if cats.count > limit { cats = Array(cats.prefix(limit)); data.truncated = true }
 
         let seriesKeys: [GroupKey] = legendValue != nil
-            ? Array(Set(groups.keys.compactMap(\.ser))).sorted()
+            ? (legendKeys ?? Array(Set(groups.keys.compactMap(\.ser))).sorted())
             : vals.map { GroupKey(label: $0.0.displayName, sort: nil) }
         var id = 0
         for c in cats {
@@ -848,7 +863,8 @@ enum Engine {
         }
         let ev = MeasureEvaluator(ctx: ctx, model: m)
         let axes = v.axis.compactMap { f in ctx.accessor(f).map { (f, $0) } }
-        guard let colValue = ctx.accessor(colField), let vf = v.values.first, let fn = valueFunction(vf, ctx, ev) else {
+        let colValue = ctx.accessor(colField), colKeys = colValue == nil ? disconnectedKeys(colField, ctx, m) : nil
+        guard colValue != nil || colKeys != nil, let vf = v.values.first, let fn = valueFunction(vf, ctx, ev) else {
             return TableData(message: L("Ajoutez des champs dans « Lignes », « Colonnes » et « Valeurs »"))
         }
         let all = ctx.rowIndices(filters)
@@ -858,13 +874,19 @@ enum Engine {
         let memos = axes.map { GroupKey.Memo($0.0.dateLevel) }, colMemo = GroupKey.Memo(colField.dateLevel)
         for r in all {
             let rk = axes.indices.map { memos[$0].key(axes[$0].1(r)) }
+            rowGroups[rk, default: []].append(r)
+            guard let colValue else { continue }
             let ck = colMemo.key(colValue(r))
             cells[rk, default: [:]][ck, default: []].append(r)
-            rowGroups[rk, default: []].append(r)
             colGroups[ck, default: []].append(r)
         }
         guard !all.isEmpty else { return TableData(message: L("Aucune donnée pour ces filtres")) }
-        let cols = Array(colGroups.keys.sorted().prefix(60))
+        if let colKeys {
+            // Disconnected column field: every column covers all the rows of its row group.
+            for k in colKeys { colGroups[k] = all }
+            for (rk, rows) in rowGroups { for k in colKeys { cells[rk, default: [:]][k] = rows } }
+        }
+        let cols = Array((colKeys ?? colGroups.keys.sorted()).prefix(60))
         let rowKeys = rowGroups.keys.sorted { a, b in
             for (x, y) in zip(a, b) where x != y { return x < y }
             return false
@@ -894,6 +916,15 @@ enum Engine {
                 + [format(value(all, []), vf, m, override: override)]
         }
         return data
+    }
+
+    /// Values of a field from a table the query can't reach (calculation group, what-if parameter), in table order:
+    /// each one is a category over every row, its filter passed to the measures.
+    static func disconnectedKeys(_ f: FieldRef, _ ctx: QueryContext, _ m: DataModel) -> [GroupKey]? {
+        guard ctx.accessor(f) == nil, let t = m.table(f.table), let i = t.columnIndex(f.column) else { return nil }
+        var seen = Set<GroupKey>(), out: [GroupKey] = []
+        for r in t.rows { let k = GroupKey.of(r[i], f.dateLevel); if seen.insert(k).inserted { out.append(k) } }
+        return out
     }
 
     // MARK: Distinct values (slicers & filters)

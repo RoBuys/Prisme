@@ -60,6 +60,20 @@ struct DataSource: Hashable, Codable {
     var jsonPath: String?
 }
 
+/// Row-level security role: a DAX filter per table (rows where it's true stay visible).
+struct SecurityRole: Codable, Hashable, Identifiable {
+    var id = UUID()
+    var name: String
+    var filters: [String: String] = [:]
+}
+
+/// Item of a calculation group: a DAX expression applied to the measure being evaluated (SELECTEDMEASURE()).
+struct CalculationItem: Codable, Hashable {
+    var name: String
+    var expression: String
+    var ordinal = 0
+}
+
 struct DataTable: Identifiable {
     var id = UUID()
     var name: String
@@ -71,6 +85,8 @@ struct DataTable: Identifiable {
     var base: [DataTable] = []
     /// DAX expression of a calculated table (its rows are recomputed from the model).
     var expression: String?
+    /// Calculation group: its items (one row each in the table).
+    var calculationItems: [CalculationItem]?
 
     /// Exact name first, then case-insensitive (DAX and Power Query names are case-insensitive).
     func columnIndex(_ name: String) -> Int? {
@@ -79,7 +95,7 @@ struct DataTable: Identifiable {
 }
 
 extension DataTable: Codable {
-    private enum CodingKeys: String, CodingKey { case id, name, columns, source, rowCount, data, steps, base, expression }
+    private enum CodingKeys: String, CodingKey { case id, name, columns, source, rowCount, data, steps, base, expression, calculationItems }
 
     /// Column-oriented payload: keeps saved reports compact.
     private struct ColumnPayload: Codable {
@@ -104,6 +120,7 @@ extension DataTable: Codable {
         }
         try c.encode(payloads, forKey: .data)
         try c.encodeIfPresent(expression, forKey: .expression)
+        try c.encodeIfPresent(calculationItems, forKey: .calculationItems)
         if !steps.isEmpty {
             try c.encode(steps, forKey: .steps)
             try c.encode(base, forKey: .base)
@@ -132,6 +149,7 @@ extension DataTable: Codable {
         self.rows = rows
         steps = try c.decodeIfPresent([TransformStep].self, forKey: .steps) ?? []
         expression = try c.decodeIfPresent(String.self, forKey: .expression)
+        calculationItems = try c.decodeIfPresent([CalculationItem].self, forKey: .calculationItems)
         base = try c.decodeIfPresent([DataTable].self, forKey: .base) ?? []
     }
 }
@@ -648,9 +666,12 @@ struct ReportDocument: Codable {
     var theme: String?
     var bookmarks: [Bookmark] = []
     var reportFilters: [PageFilter] = []
+    var roles: [SecurityRole] = []
 
     init(tables: [DataTable], pages: [ReportPage], relationships: [Relationship], measures: [Measure],
-         modelLayout: [String: CGPoint], theme: String?, bookmarks: [Bookmark] = [], reportFilters: [PageFilter] = []) {
+         modelLayout: [String: CGPoint], theme: String?, bookmarks: [Bookmark] = [], reportFilters: [PageFilter] = [],
+         roles: [SecurityRole] = []) {
+        self.roles = roles
         self.theme = theme
         self.bookmarks = bookmarks
         self.reportFilters = reportFilters
@@ -662,7 +683,7 @@ struct ReportDocument: Codable {
         self.modelLayout = modelLayout
     }
 
-    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout, theme, bookmarks, reportFilters }
+    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout, theme, bookmarks, reportFilters, roles }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -675,5 +696,6 @@ struct ReportDocument: Codable {
         theme = try c.decodeIfPresent(String.self, forKey: .theme)
         bookmarks = try c.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
         reportFilters = try c.decodeIfPresent([PageFilter].self, forKey: .reportFilters) ?? []
+        roles = try c.decodeIfPresent([SecurityRole].self, forKey: .roles) ?? []
     }
 }

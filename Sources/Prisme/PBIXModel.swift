@@ -93,6 +93,9 @@ enum PBIXDataModel {
         }
     }
 
+    /// Roles read by the last `parseMetadata` (with the tables, as the metadata database is temporary).
+    nonisolated(unsafe) static var lastRoles: [SecurityRole] = []
+
     static func parseMetadata(_ path: String) throws -> ([PBITableSpec], [PBIRelSpec]) {
         var names: [String: String] = [:]
         var order: [String] = []
@@ -117,6 +120,22 @@ enum PBIXDataModel {
         for r in try rows(path, "SELECT TableID, Name, Expression, FormatString FROM Measure ORDER BY ID") {
             specs[r[0]]?.measures.append((r[1], r[2].trimmingCharacters(in: .whitespacesAndNewlines), r[3].isEmpty ? nil : r[3]))
         }
+        // Calculation groups and their items.
+        if let groups = try? rows(path, "SELECT g.TableID, i.Name, i.Expression, i.Ordinal FROM CalculationItem i JOIN CalculationGroup g ON i.CalculationGroupID = g.ID ORDER BY i.Ordinal, i.ID") {
+            for r in groups where specs[r[0]] != nil {
+                let items = specs[r[0]]?.calculationItems ?? []
+                specs[r[0]]?.calculationItems = items + [CalculationItem(name: r[1], expression: r[2], ordinal: Int(r[3]) ?? 0)]
+            }
+        }
+        // Row-level security.
+        var roles: [String: SecurityRole] = [:], roleOrder: [String] = []
+        if let perms = try? rows(path, "SELECT r.ID, r.Name, p.TableID, p.FilterExpression FROM Role r LEFT JOIN TablePermission p ON p.RoleID = r.ID ORDER BY r.ID") {
+            for r in perms {
+                if roles[r[0]] == nil { roles[r[0]] = SecurityRole(name: r[1]); roleOrder.append(r[0]) }
+                if let t = names[r[2]], !r[3].isEmpty { roles[r[0]]?.filters[t] = r[3] }
+            }
+        }
+        lastRoles = roleOrder.compactMap { roles[$0] }
         for r in try rows(path, "SELECT TableID, Type, QueryDefinition FROM Partition ORDER BY ID") {
             guard specs[r[0]] != nil else { continue }
             if r[1] == "2" { specs[r[0]]?.calculated = true; specs[r[0]]?.calcExpression = r[2] }

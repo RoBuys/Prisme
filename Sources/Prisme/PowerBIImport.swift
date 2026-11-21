@@ -66,6 +66,8 @@ struct PBITableSpec {
     var calculated = false
     /// DAX expression of a calculated table.
     var calcExpression: String?
+    /// Calculation group items.
+    var calculationItems: [CalculationItem]?
 }
 
 struct PBIRelSpec {
@@ -89,6 +91,7 @@ struct PBIProject {
     /// Report-level filters and bookmarks (in order).
     var reportFilters: [PBIFilterEntry] = []
     var bookmarks: [[String: Any]] = []
+    var roles: [SecurityRole] = []
     var folder: URL
 }
 
@@ -112,6 +115,7 @@ enum PowerBIImporter {
         if let schema = try? Data(contentsOf: dir.appendingPathComponent("DataModelSchema")),
            let json = jsonObject(schema) as? [String: Any] {
             (p.tables, p.relationships) = parseTMSL(json)
+            p.roles = tmslRoles(json)
             p.queries = sharedExpressions(json)
             if let mashup = try? Data(contentsOf: dir.appendingPathComponent("DataMashup")) {
                 p.queries.merge(mashupQueries(mashup)) { a, _ in a }
@@ -122,6 +126,7 @@ enum PowerBIImporter {
         } else if let dm = try? Data(contentsOf: dir.appendingPathComponent("DataModel")),
                   let model = try? PBIXDataModel.model(dm) {
             (p.tables, p.relationships) = model
+            p.roles = PBIXDataModel.lastRoles
             p.fromPBIXModel = true
             p.storedData = (try? PBIXDataModel.storedTables(dm)) ?? [:]
         } else {
@@ -165,6 +170,7 @@ enum PowerBIImporter {
         var p = PBIProject(folder: folder)
         if let bim = try? Data(contentsOf: modelDir.appendingPathComponent("model.bim")), let json = jsonObject(bim) as? [String: Any] {
             (p.tables, p.relationships) = parseTMSL(json)
+            p.roles = tmslRoles(json)
             p.queries = sharedExpressions(json)
         } else if FileManager.default.fileExists(atPath: modelDir.appendingPathComponent("definition").path) {
             (p.tables, p.relationships) = parseTMDL(modelDir.appendingPathComponent("definition"))
@@ -233,6 +239,19 @@ enum PowerBIImporter {
     /// Tables' own queries can be referenced by other queries (`Source = #"Other table"`).
     static func addTableQueries(_ p: inout PBIProject) {
         for t in p.tables { if let m = t.mExpression, p.queries[t.name] == nil { p.queries[t.name] = m } }
+    }
+
+    /// Row-level security roles of a TMSL model.
+    static func tmslRoles(_ root: [String: Any]) -> [SecurityRole] {
+        let model = root["model"] as? [String: Any] ?? root
+        return (model["roles"] as? [[String: Any]] ?? []).compactMap { r in
+            guard let n = r["name"] as? String else { return nil }
+            var role = SecurityRole(name: n)
+            for p in r["tablePermissions"] as? [[String: Any]] ?? [] {
+                if let t = p["name"] as? String, let e = text(p["filterExpression"]) { role.filters[t] = e }
+            }
+            return role
+        }
     }
 
     /// Shared M expressions of a TMSL model (parameters and helper queries).
@@ -353,6 +372,12 @@ enum PowerBIImporter {
                 spec.columns.append(PBIColumnSpec(name: n, dataType: c["dataType"] as? String ?? "string",
                                                   sourceColumn: c["sourceColumn"] as? String,
                                                   expression: calc ? text(c["expression"]) : nil))
+            }
+            if let items = (t["calculationGroup"] as? [String: Any])?["calculationItems"] as? [[String: Any]] {
+                spec.calculationItems = items.compactMap { i in
+                    guard let n = i["name"] as? String, let e = text(i["expression"]) else { return nil }
+                    return CalculationItem(name: n, expression: e, ordinal: i["ordinal"] as? Int ?? 0)
+                }.sorted { $0.ordinal < $1.ordinal }
             }
             for m in t["measures"] as? [[String: Any]] ?? [] {
                 if let n = m["name"] as? String, let e = text(m["expression"]) {
@@ -1263,6 +1288,18 @@ extension AppState {
             }
             let dataCols = spec.columns.filter { $0.expression == nil }
             var table = DataTable(name: spec.name, columns: dataCols.map { DataColumn(name: $0.name, type: Self.columnType($0.dataType)) }, rows: [])
+            if let items = spec.calculationItems, !items.isEmpty {
+                // Calculation group: one row per item (name, and ordinal when the table has that column).
+                let nameCol = dataCols.firstIndex { Self.columnType($0.dataType) == .text } ?? 0
+                let ordinalCol = dataCols.firstIndex { ($0.sourceColumn ?? $0.name).caseInsensitiveEquals("Ordinal") }
+                table.rows = items.map { item in dataCols.indices.map { i in
+                    i == nameCol ? .text(item.name) : i == ordinalCol ? .number(Double(item.ordinal)) : .empty
+                } }
+                table.calculationItems = items
+                tables.append(table)
+                loadedCount += 1
+                continue
+            }
             // Parameters resolved, helper queries followed to the actual source.
             let mExpr = spec.mExpression.map { MSource.effective($0, queries: project.queries, params: params) }
             // Power Query steps, translated (then aligned on the model's columns) to be replayed on the source data.
@@ -1465,6 +1502,8 @@ extension AppState {
         }
         if pages.isEmpty { pages = [ReportPage(name: L("Page 1"))] }
         let bookmarkByPBI = importBookmarks(project, pageByPBI: pageByPBI, visualByPBI: visualByPBI)
+        roles = project.roles
+        if !roles.isEmpty { notes.append(L("%@ rôle(s) de sécurité importé(s) : Affichage › Afficher en tant que.", roles.count)) }
         for l in links {
             let action: ButtonAction?
             switch l.type.lowercased() {
@@ -1570,6 +1609,8 @@ extension AppState {
         measures = []
         bookmarks = []
         reportFilters = []
+        roles = []
+        viewAsRole = nil
         modelLayout = [:]
         theme = Theme.defaultName
         pages = []

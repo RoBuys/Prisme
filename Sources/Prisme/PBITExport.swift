@@ -13,9 +13,16 @@ enum PBITExporter {
     }
 
     static func export(tables: [DataTable], measures: [Measure], relationships: [Relationship], pages: [ReportPage],
-                       culture: String) throws -> Result {
+                       culture: String, roles: [SecurityRole] = []) throws -> Result {
         var skipped: [String] = []
-        let schema = modelSchema(tables: tables, measures: measures, relationships: relationships, culture: culture)
+        var schema = modelSchema(tables: tables, measures: measures, relationships: relationships, culture: culture)
+        if !roles.isEmpty, var model = schema["model"] as? [String: Any] {
+            model["roles"] = roles.map { r in
+                ["name": r.name, "modelPermission": "read",
+                 "tablePermissions": r.filters.sorted { $0.key < $1.key }.map { ["name": $0.key, "filterExpression": $0.value] }]
+            }
+            schema["model"] = model
+        }
         let layout = reportLayout(pages: pages, measures: measures, skipped: &skipped)
         var zip = ZipWriter()
         let parts: [(String, Data)] = [
@@ -93,13 +100,18 @@ enum PBITExporter {
                 columns.append(col)
             }
             let source: [String: Any]
-            if let e = t.expression {
+            if let items = t.calculationItems, !items.isEmpty {
+                source = ["type": "calculationGroup"]
+            } else if let e = t.expression {
                 source = ["type": "calculated", "expression": e]
             } else {
                 source = ["type": "m", "expression": mQuery(t, types: types).components(separatedBy: "\n")]
             }
             var table: [String: Any] = ["name": t.name, "columns": columns,
                                         "partitions": [["name": t.name, "mode": "import", "source": source]]]
+            if let items = t.calculationItems, !items.isEmpty {
+                table["calculationGroup"] = ["calculationItems": items.map { ["name": $0.name, "expression": $0.expression, "ordinal": $0.ordinal] }]
+            }
             let ms = measures.filter { $0.table == t.name }.map { m -> [String: Any] in
                 var d: [String: Any] = ["name": m.name, "expression": m.expression]
                 if let f = formatString(m.format) { d["formatString"] = f }
@@ -385,7 +397,7 @@ struct ZipWriter {
 extension AppState {
     func pbitData() throws -> PBITExporter.Result {
         try PBITExporter.export(tables: tables, measures: measures, relationships: relationships, pages: pages,
-                                culture: Loc.language == .fr ? "fr-FR" : "en-US")
+                                culture: Loc.language == .fr ? "fr-FR" : "en-US", roles: roles)
     }
 
     func exportPBIT() {

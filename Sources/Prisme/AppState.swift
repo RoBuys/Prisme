@@ -57,6 +57,12 @@ final class AppState {
     var bookmarks: [Bookmark] = []
     /// Filters on every page of the report.
     var reportFilters: [PageFilter] = []
+    /// Row-level security roles, and the role (and user) the report is viewed as.
+    var roles: [SecurityRole] = [] { didSet { modelVersion = Self.nextVersion() } }
+    var viewAsRole: String? { didSet { modelVersion = Self.nextVersion() } }
+    var viewAsUser = "" { didSet { modelVersion = Self.nextVersion() } }
+    var showRoles = false
+    @ObservationIgnored private var roleCache: (version: Int, tables: [DataTable])?
     /// Report color theme (see `Theme.themes`).
     var theme = Theme.defaultName
     var pages: [ReportPage]
@@ -79,6 +85,7 @@ final class AppState {
         var theme: String
         var bookmarks: [Bookmark]
         var reportFilters: [PageFilter]
+        var roles: [SecurityRole]
         var currentPageID: UUID
     }
 
@@ -92,7 +99,7 @@ final class AppState {
     private func snapshot() -> Snapshot {
         Snapshot(tables: tables, pages: pages, relationships: relationships, measures: measures,
                  modelLayout: modelLayout, theme: theme, bookmarks: bookmarks, reportFilters: reportFilters,
-                 currentPageID: currentPageID)
+                 roles: roles, currentPageID: currentPageID)
     }
 
     /// Records a change for undo and marks the document as modified.
@@ -137,6 +144,7 @@ final class AppState {
         theme = s.theme
         bookmarks = s.bookmarks
         reportFilters = s.reportFilters
+        roles = s.roles
         currentPageID = pages.contains { $0.id == s.currentPageID } ? s.currentPageID : pages[0].id
         if let id = selectedVisualID, visual(id) == nil { selectedVisualID = nil }
         crossFilter = nil
@@ -183,9 +191,49 @@ final class AppState {
     }
 
     var model: DataModel {
-        var m = DataModel(tables: tables, relationships: relationships, measures: measures)
+        var m = DataModel(tables: viewAsRole != nil ? roleTables() : tables, relationships: relationships, measures: measures)
         m.version = modelVersion
         return m
+    }
+
+    /// Tables as seen by the role the report is viewed as: each table filter keeps its rows, and the filter
+    /// flows through relationships (to the "many" side, both ways when set), so ALL() can't escape it.
+    func roleTables() -> [DataTable] {
+        guard let name = viewAsRole, let role = roles.first(where: { $0.name == name }) else { return tables }
+        if let c = roleCache, c.version == modelVersion { return c.tables }
+        MeasureEvaluator.currentUser = viewAsUser
+        var out = tables
+        let full = DataModel(tables: tables, relationships: relationships, measures: measures)
+        var changed = Set<String>()
+        for (tableName, expr) in role.filters where !expr.trimmingCharacters(in: .whitespaces).isEmpty {
+            guard let ti = out.firstIndex(where: { $0.name.caseInsensitiveEquals(tableName) }),
+                  case .success(let e) = MeasureCompiler.parse(expr) else { continue }
+            let ev = MeasureEvaluator(ctx: QueryContext(base: out[ti], model: full), model: full)
+            out[ti].rows = out[ti].rows.indices.filter { r in (try? ev.evaluateRow(e, row: r).truthy) ?? false }.map { out[ti].rows[$0] }
+            changed.insert(out[ti].name)
+        }
+        // Propagate: rows whose related row was filtered out disappear too.
+        var pass = 0
+        while !changed.isEmpty && pass < 10 {
+            pass += 1
+            var next = Set<String>()
+            for r in relationships where r.isActive {
+                var flows: [(from: String, fromCol: String, to: String, toCol: String)] = []
+                if changed.contains(r.toTable) { flows.append((r.toTable, r.toColumn, r.fromTable, r.fromColumn)) }
+                if r.crossBoth, changed.contains(r.fromTable) { flows.append((r.fromTable, r.fromColumn, r.toTable, r.toColumn)) }
+                for f in flows {
+                    guard let si = out.firstIndex(where: { $0.name == f.from }), let di = out.firstIndex(where: { $0.name == f.to }),
+                          let sc = out[si].columnIndex(f.fromCol), let dc = out[di].columnIndex(f.toCol) else { continue }
+                    let keys = Set(out[si].rows.map { $0[sc].joinKey })
+                    let before = out[di].rows.count
+                    out[di].rows = out[di].rows.filter { keys.contains($0[dc].joinKey) }
+                    if out[di].rows.count != before { next.insert(f.to) }
+                }
+            }
+            changed = next
+        }
+        roleCache = (modelVersion, out)
+        return out
     }
 
     func measure(for f: FieldRef) -> Measure? { measures.first { $0.table == f.table && $0.name == f.column } }
@@ -1512,6 +1560,8 @@ final class AppState {
         measures = []
         bookmarks = []
         reportFilters = []
+        roles = []
+        viewAsRole = nil
         theme = Theme.defaultName
         modelLayout = [:]
         pages = [p]
@@ -1544,6 +1594,8 @@ final class AppState {
             theme = doc.theme ?? Theme.defaultName
             bookmarks = doc.bookmarks
             reportFilters = doc.reportFilters
+            roles = doc.roles
+            viewAsRole = nil
             pages = doc.pages.isEmpty ? [ReportPage(name: L("Page 1"))] : doc.pages
             currentPageID = pages[0].id
             selectedVisualID = nil
@@ -1575,7 +1627,7 @@ final class AppState {
 
     private func write(to url: URL) -> Bool {
         do {
-            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout, theme: theme, bookmarks: bookmarks, reportFilters: reportFilters))
+            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout, theme: theme, bookmarks: bookmarks, reportFilters: reportFilters, roles: roles))
             try data.write(to: url, options: .atomic)
             fileURL = url
             isDirty = false
