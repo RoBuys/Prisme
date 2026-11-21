@@ -10,7 +10,7 @@ A native macOS business-intelligence app (SwiftUI + Swift Charts), inspired by P
 import data, then build interactive reports with drag and drop. The interface is available in French and English
 (**Prisme → Settings…** / ⌘, — follows the system language by default; the sample dataset follows it too).
 
-## Features (v0.1)
+## Features
 
 - **Data import**: CSV / TSV (detects the `,` `;` tab `|` delimiters, French-style numbers such as `1 234,56`,
   UTF-8 or Windows-1252) and Excel `.xlsx` (every sheet, Excel dates recognized). Drop a file on the page or use
@@ -159,7 +159,7 @@ The report list uses the Power BI REST API (`GET /reports`, which includes repor
 `powerbi-client` (loaded from jsDelivr with Subresource Integrity), using your Entra token (`TokenType.Aad`), which is
 renewed automatically.
 
-### Power BI compatibility (1.0)
+## Power BI compatibility
 
 - **Report state**: report, page and visual filters, slicer selections, hidden visuals and groups, bookmarks (with
   their data / display / page / target options), button actions (bookmark, page, back, link), page navigators.
