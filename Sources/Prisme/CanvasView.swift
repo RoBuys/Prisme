@@ -15,7 +15,7 @@ struct ReportCanvas: View {
                     Rectangle()
                         .fill(Color.white)
                         .onTapGesture { state.clearSelection() }
-                    ForEach(state.currentPage.visuals) { v in
+                    ForEach(state.currentPage.visuals.filter { $0.hidden != true }) { v in
                         VisualContainer(visual: v, scale: s)
                     }
                     if state.currentPage.visuals.isEmpty {
@@ -138,6 +138,7 @@ struct VisualContainer: View {
             .contextMenu {
                 Button(L("Dupliquer")) { state.duplicateVisual(visual.id) }
                 Button(L("Mettre au premier plan")) { state.bringToFront(visual.id) }
+                Button(L("Masquer")) { state.setHidden(visual.id, true) }
                 Button(L("Exporter les données (CSV)…")) { state.exportCSV(visual.id) }
                 drillthroughItems
                 Divider()

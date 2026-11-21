@@ -483,6 +483,10 @@ struct Visual: Identifiable, Hashable, Codable {
     var values: [ValueField] = []
     var slicerSelection: Set<String> = []
     var format: VisualFormat?
+    /// Hidden visuals aren't drawn (bookmarks can show them).
+    var hidden: Bool?
+    /// Filters on this visual only.
+    var filters: [PageFilter]?
     /// Hierarchy drill state: current axis level, labels chosen at the upper levels, and whether clicks drill down.
     var drillLevel: Int?
     var drillPath: [String]?
@@ -534,6 +538,18 @@ struct PageFilter: Identifiable, Hashable, Codable {
     var id = UUID()
     var field: FieldRef
     var selected: Set<String> = []
+    /// Range filter (numbers, or dates as timestamps), bounds included.
+    var lower: Double?
+    var upper: Double?
+
+    var isActive: Bool { !selected.isEmpty || lower != nil || upper != nil }
+
+    var spec: FilterSpec? {
+        guard isActive else { return nil }
+        let range: ClosedRange<Double>? = lower != nil || upper != nil
+            ? (lower ?? -Double.greatestFiniteMagnitude)...(upper ?? Double.greatestFiniteMagnitude) : nil
+        return FilterSpec(field: field, allowed: selected, range: range)
+    }
     /// Set by a drillthrough from another page.
     var isDrillthrough: Bool?
 }
@@ -598,6 +614,7 @@ struct Bookmark: Identifiable, Hashable, Codable {
         var slicerSelection: Set<String>
         var drillLevel: Int?
         var drillPath: [String]?
+        var hidden: Bool?
     }
 
     var id = UUID()
@@ -605,6 +622,13 @@ struct Bookmark: Identifiable, Hashable, Codable {
     var pageID: UUID
     var pageFilters: [UUID: [PageFilter]] = [:]
     var visuals: [UUID: VisualState] = [:]
+    var reportFilters: [PageFilter]?
+    /// What applying the bookmark changes (nil = yes): filters and slicers, visibility, current page.
+    var applyData: Bool?
+    var applyDisplay: Bool?
+    var changePage: Bool?
+    /// Only these visuals are affected (nil = all).
+    var targets: Set<UUID>?
 }
 
 struct ReportDocument: Codable {
@@ -616,11 +640,13 @@ struct ReportDocument: Codable {
     var modelLayout: [String: CGPoint] = [:]
     var theme: String?
     var bookmarks: [Bookmark] = []
+    var reportFilters: [PageFilter] = []
 
     init(tables: [DataTable], pages: [ReportPage], relationships: [Relationship], measures: [Measure],
-         modelLayout: [String: CGPoint], theme: String?, bookmarks: [Bookmark] = []) {
+         modelLayout: [String: CGPoint], theme: String?, bookmarks: [Bookmark] = [], reportFilters: [PageFilter] = []) {
         self.theme = theme
         self.bookmarks = bookmarks
+        self.reportFilters = reportFilters
         self.version = 3
         self.tables = tables
         self.pages = pages
@@ -629,7 +655,7 @@ struct ReportDocument: Codable {
         self.modelLayout = modelLayout
     }
 
-    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout, theme, bookmarks }
+    private enum CodingKeys: String, CodingKey { case version, tables, pages, relationships, measures, modelLayout, theme, bookmarks, reportFilters }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -641,5 +667,6 @@ struct ReportDocument: Codable {
         modelLayout = try c.decodeIfPresent([String: CGPoint].self, forKey: .modelLayout) ?? [:]
         theme = try c.decodeIfPresent(String.self, forKey: .theme)
         bookmarks = try c.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
+        reportFilters = try c.decodeIfPresent([PageFilter].self, forKey: .reportFilters) ?? []
     }
 }

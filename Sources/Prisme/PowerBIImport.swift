@@ -27,6 +27,13 @@ struct PBIVisualSpec {
     var element: ElementContent?
     /// Image visuals: file name in the report's registered resources.
     var imageName: String?
+    /// Report state: identifier in the report, group, visibility, filters, slicer selection, button action.
+    var pbiName = ""
+    var parentGroup: String?
+    var hidden = false
+    var filters: [PBIFilterEntry] = []
+    var slicer: PBICondition?
+    var link: (type: String, target: String?)?
 }
 
 struct PBIPageSpec {
@@ -34,6 +41,12 @@ struct PBIPageSpec {
     var width: Double
     var height: Double
     var visuals: [PBIVisualSpec] = []
+    var pbiName = ""
+    var filters: [PBIFilterEntry] = []
+    /// Visual groups: parent group and visibility.
+    var groups: [String: (parent: String?, hidden: Bool)] = [:]
+    var hidden = false
+    var isTooltip = false
 }
 
 struct PBIColumnSpec {
@@ -72,6 +85,9 @@ struct PBIProject {
     var storedData: [String: [String: [CellValue]]] = [:]
     /// Shared Power Query queries and parameters (DataMashup or model expressions), by name.
     var queries: [String: String] = [:]
+    /// Report-level filters and bookmarks (in order).
+    var reportFilters: [PBIFilterEntry] = []
+    var bookmarks: [[String: Any]] = []
     var folder: URL
 }
 
@@ -114,9 +130,11 @@ enum PowerBIImporter {
         if let layout = try? Data(contentsOf: dir.appendingPathComponent("Report/Layout")),
            let json = jsonObject(layout) as? [String: Any] {
             p.pages = parseLayout(json)
+            (p.reportFilters, p.bookmarks) = layoutState(json)
         } else if FileManager.default.fileExists(atPath: pbir.appendingPathComponent("pages").path) {
             // Newer files store the report in the PBIR folder format, as .pbip projects do.
             p.pages = parsePBIR(pbir)
+            (p.reportFilters, p.bookmarks) = pbirState(pbir)
         } else {
             throw ImportError(message: L("Mise en page du rapport introuvable dans « %@ ».", url.lastPathComponent))
         }
@@ -155,9 +173,11 @@ enum PowerBIImporter {
         let defDir = reportDir.appendingPathComponent("definition")
         if FileManager.default.fileExists(atPath: defDir.appendingPathComponent("pages").path) {
             p.pages = parsePBIR(defDir)
+            (p.reportFilters, p.bookmarks) = pbirState(defDir)
         } else if let legacy = try? Data(contentsOf: reportDir.appendingPathComponent("report.json")),
                   let json = jsonObject(legacy) as? [String: Any] {
             p.pages = parseLayout(json)
+            (p.reportFilters, p.bookmarks) = layoutState(json)
         } else {
             throw ImportError(message: L("Rapport introuvable dans le projet « %@ ».", url.lastPathComponent))
         }
@@ -694,15 +714,31 @@ enum PowerBIImporter {
         return sections.map { s in
             var page = PBIPageSpec(name: s["displayName"] as? String ?? L("Page"),
                                    width: s["width"] as? Double ?? 1280, height: s["height"] as? Double ?? 720)
+            page.pbiName = s["name"] as? String ?? ""
+            page.filters = PBIFilters.entries(s["filters"])
+            if let pc = (s["config"] as? String).flatMap({ jsonObject(Data($0.utf8)) as? [String: Any] }) {
+                page.hidden = (pc["visibility"] as? Int ?? 0) == 1
+                page.isTooltip = (pc["type"] as? Int ?? 0) == 2 || (pc["pageType"] as? String) == "Tooltip"
+            }
             for vc in s["visualContainers"] as? [[String: Any]] ?? [] {
                 guard let cfgText = vc["config"] as? String,
-                      let cfg = (try? JSONSerialization.jsonObject(with: Data(cfgText.utf8))) as? [String: Any],
-                      let sv = cfg["singleVisual"] as? [String: Any], let type = sv["visualType"] as? String else { continue }
+                      let cfg = (try? JSONSerialization.jsonObject(with: Data(cfgText.utf8))) as? [String: Any] else { continue }
+                if let g = cfg["singleVisualGroup"] as? [String: Any], let n = cfg["name"] as? String {
+                    page.groups[n] = (cfg["parentGroupName"] as? String, g["isHidden"] as? Bool ?? false)
+                    continue
+                }
+                guard let sv = cfg["singleVisual"] as? [String: Any], let type = sv["visualType"] as? String else { continue }
                 let frame = CGRect(x: vc["x"] as? Double ?? 0, y: vc["y"] as? Double ?? 0,
                                    width: vc["width"] as? Double ?? 300, height: vc["height"] as? Double ?? 200)
                 var spec = PBIVisualSpec(type: type, frame: frame, title: title(sv["vcObjects"]))
                 spec.element = element(type, sv["objects"] as? [String: Any] ?? [:])
                 spec.imageName = imageName(sv["objects"] as? [String: Any] ?? [:])
+                spec.pbiName = cfg["name"] as? String ?? ""
+                spec.parentGroup = cfg["parentGroupName"] as? String
+                spec.hidden = ((sv["display"] as? [String: Any])?["mode"] as? String) == "hidden"
+                spec.filters = PBIFilters.entries(vc["filters"])
+                spec.slicer = PBIFilters.slicerCondition(sv["objects"])
+                spec.link = PBIFilters.link(sv["vcObjects"])
                 let query = sv["prototypeQuery"] as? [String: Any] ?? [:]
                 var aliases: [String: String] = [:]
                 for f in query["From"] as? [[String: Any]] ?? [] {
@@ -721,6 +757,37 @@ enum PowerBIImporter {
         }
     }
 
+    /// Report filters and bookmarks of a Layout (bookmark groups flattened).
+    static func layoutState(_ json: [String: Any]) -> ([PBIFilterEntry], [[String: Any]]) {
+        let config = (json["config"] as? String).flatMap { jsonObject(Data($0.utf8)) as? [String: Any] } ?? [:]
+        func flatten(_ items: [[String: Any]]) -> [[String: Any]] {
+            items.flatMap { b in (b["children"] as? [[String: Any]]).map(flatten) ?? [b] }
+        }
+        return (PBIFilters.entries(json["filters"]), flatten(config["bookmarks"] as? [[String: Any]] ?? []))
+    }
+
+    /// Report filters and bookmarks of a PBIR definition folder.
+    static func pbirState(_ def: URL) -> ([PBIFilterEntry], [[String: Any]]) {
+        let report = (try? Data(contentsOf: def.appendingPathComponent("report.json"))).flatMap { jsonObject($0) as? [String: Any] } ?? [:]
+        let dir = def.appendingPathComponent("bookmarks")
+        var order: [String] = []
+        if let meta = (try? Data(contentsOf: dir.appendingPathComponent("bookmarks.json"))).flatMap({ jsonObject($0) as? [String: Any] }) {
+            func flatten(_ items: [[String: Any]]) -> [String] {
+                items.flatMap { i in (i["children"] as? [Any]).map { c in c.compactMap { $0 as? String } + flatten(c.compactMap { $0 as? [String: Any] }) } ?? [i["name"] as? String].compactMap { $0 } }
+            }
+            order = flatten(meta["items"] as? [[String: Any]] ?? [])
+        }
+        let files = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasSuffix(".bookmark.json") }.sorted()
+        var byName: [String: [String: Any]] = [:]
+        for f in files {
+            if let b = (try? Data(contentsOf: dir.appendingPathComponent(f))).flatMap({ jsonObject($0) as? [String: Any] }) {
+                byName[b["name"] as? String ?? String(f.dropLast(".bookmark.json".count))] = b
+            }
+        }
+        let names = order.filter { byName[$0] != nil } + byName.keys.filter { !order.contains($0) }.sorted()
+        return (PBIFilters.entries(report["filterConfig"]), names.compactMap { byName[$0] })
+    }
+
     // MARK: Report (PBIR)
 
     static func parsePBIR(_ def: URL) -> [PBIPageSpec] {
@@ -737,17 +804,31 @@ enum PowerBIImporter {
                   let pj = jsonObject(pd) as? [String: Any] else { return nil }
             var page = PBIPageSpec(name: pj["displayName"] as? String ?? name,
                                    width: pj["width"] as? Double ?? 1280, height: pj["height"] as? Double ?? 720)
+            page.pbiName = pj["name"] as? String ?? name
+            page.filters = PBIFilters.entries(pj["filterConfig"])
+            page.hidden = (pj["visibility"] as? String) == "HiddenInViewMode"
+            page.isTooltip = (pj["type"] as? String) == "Tooltip" || ((pj["pageBinding"] as? [String: Any])?["type"] as? String) == "Tooltip"
             let vDir = dir.appendingPathComponent("visuals")
             for v in (try? fm.contentsOfDirectory(atPath: vDir.path))?.sorted() ?? [] {
                 guard let vd = try? Data(contentsOf: vDir.appendingPathComponent(v).appendingPathComponent("visual.json")),
-                      let vj = jsonObject(vd) as? [String: Any], let visual = vj["visual"] as? [String: Any],
-                      let type = visual["visualType"] as? String else { continue }
+                      let vj = jsonObject(vd) as? [String: Any] else { continue }
+                if vj["visualGroup"] != nil {
+                    page.groups[vj["name"] as? String ?? v] = (vj["parentGroupName"] as? String, vj["isHidden"] as? Bool ?? false)
+                    continue
+                }
+                guard let visual = vj["visual"] as? [String: Any], let type = visual["visualType"] as? String else { continue }
                 let pos = vj["position"] as? [String: Any] ?? [:]
                 let frame = CGRect(x: pos["x"] as? Double ?? 0, y: pos["y"] as? Double ?? 0,
                                    width: pos["width"] as? Double ?? 300, height: pos["height"] as? Double ?? 200)
                 var spec = PBIVisualSpec(type: type, frame: frame, title: title(visual["visualContainerObjects"]))
                 spec.element = element(type, visual["objects"] as? [String: Any] ?? [:])
                 spec.imageName = imageName(visual["objects"] as? [String: Any] ?? [:])
+                spec.pbiName = vj["name"] as? String ?? v
+                spec.parentGroup = vj["parentGroupName"] as? String
+                spec.hidden = vj["isHidden"] as? Bool ?? false
+                spec.filters = PBIFilters.entries(vj["filterConfig"])
+                spec.slicer = PBIFilters.slicerCondition(visual["objects"])
+                spec.link = PBIFilters.link(visual["visualContainerObjects"])
                 let state = (visual["query"] as? [String: Any])?["queryState"] as? [String: Any] ?? [:]
                 for (role, value) in state {
                     let projections = (value as? [String: Any])?["projections"] as? [[String: Any]] ?? []
@@ -1250,13 +1331,62 @@ extension AppState {
 
         var skipped: [String: Int] = [:]
         var visualCount = 0
-        pages = project.pages.map { p in
+        // Pages, with their filters, hidden visuals and groups; ids kept to resolve bookmarks and button actions.
+        var unsupportedFilters = 0
+        let pageIDs = project.pages.map { _ in UUID() }
+        var pageByPBI: [String: UUID] = [:]
+        for (i, p) in project.pages.enumerated() where !p.pbiName.isEmpty { pageByPBI[p.pbiName] = pageIDs[i] }
+        var visualByPBI: [UUID: [String: UUID]] = [:]
+        var links: [(page: UUID, visual: UUID, type: String, target: String?)] = []
+        let navigable = project.pages.indices.filter { !project.pages[$0].hidden && !project.pages[$0].isTooltip }
+        reportFilters = project.reportFilters.compactMap { pageFilter($0, unsupported: &unsupportedFilters) }
+        pages = project.pages.enumerated().map { pi, p in
             var page = ReportPage(name: p.name)
+            page.id = pageIDs[pi]
+            page.filters = p.filters.compactMap { pageFilter($0, unsupported: &unsupportedFilters) }
             let sx = PageSize.width / max(p.width, 1), sy = PageSize.height / max(p.height, 1)
+            func groupHidden(_ g: String?) -> Bool {
+                var g = g, seen = Set<String>()
+                while let n = g, seen.insert(n).inserted {
+                    if p.groups[n]?.hidden == true { return true }
+                    g = p.groups[n]?.parent
+                }
+                return false
+            }
             for spec in p.visuals {
+                let frame = CGRect(x: spec.frame.minX * sx, y: spec.frame.minY * sy,
+                                   width: max(120, spec.frame.width * sx), height: max(70, spec.frame.height * sy))
+                if spec.type == "pageNavigator" {
+                    // One button per visible page.
+                    let horizontal = spec.frame.width >= spec.frame.height
+                    let n = max(navigable.count, 1)
+                    for (k, target) in navigable.enumerated() {
+                        var b = Visual(type: .button, frame: horizontal
+                            ? CGRect(x: spec.frame.minX * sx + spec.frame.width * sx * CGFloat(k) / CGFloat(n), y: spec.frame.minY * sy,
+                                     width: spec.frame.width * sx / CGFloat(n), height: spec.frame.height * sy)
+                            : CGRect(x: spec.frame.minX * sx, y: spec.frame.minY * sy + spec.frame.height * sy * CGFloat(k) / CGFloat(n),
+                                     width: spec.frame.width * sx, height: spec.frame.height * sy / CGFloat(n)))
+                        var c = ElementContent.defaults(for: .button)
+                        c.text = project.pages[target].name
+                        c.action = .page(pageIDs[target])
+                        if target == pi { c.fill = "1F4E9C" }
+                        b.content = c
+                        b.showTitle = false
+                        if spec.hidden || groupHidden(spec.parentGroup) { b.hidden = true }
+                        page.visuals.append(b)
+                    }
+                    visualCount += 1
+                    continue
+                }
                 if var v = makeVisual(spec) {
-                    v.frame = CGRect(x: spec.frame.minX * sx, y: spec.frame.minY * sy,
-                                     width: max(120, spec.frame.width * sx), height: max(70, spec.frame.height * sy))
+                    v.frame = frame
+                    if spec.hidden || groupHidden(spec.parentGroup) { v.hidden = true }
+                    let vf = spec.filters.filter { $0.condition != nil }.compactMap { pageFilter($0, unsupported: &unsupportedFilters) }
+                        .filter(\.isActive)
+                    if !vf.isEmpty { v.filters = vf }
+                    if v.type == .slicer, let c = spec.slicer { v.slicerSelection = slicerSelection(c, field: v.axis.first) }
+                    if let l = spec.link, v.type.isElement { links.append((page.id, v.id, l.type, l.target)) }
+                    if !spec.pbiName.isEmpty { visualByPBI[page.id, default: [:]][spec.pbiName] = v.id }
                     page.visuals.append(v)
                     visualCount += 1
                 } else {
@@ -1266,6 +1396,26 @@ extension AppState {
             return page
         }
         if pages.isEmpty { pages = [ReportPage(name: L("Page 1"))] }
+        let bookmarkByPBI = importBookmarks(project, pageByPBI: pageByPBI, visualByPBI: visualByPBI)
+        for l in links {
+            let action: ButtonAction?
+            switch l.type.lowercased() {
+            case "bookmark": action = l.target.flatMap { bookmarkByPBI[$0] }.map { .bookmark($0) }
+            case "pagenavigation": action = l.target.flatMap { pageByPBI[$0] }.map { .page($0) }
+            case "back": action = .back
+            case "weburl": action = l.target.map { .url($0) }
+            default: action = nil
+            }
+            guard let action, let pi = pages.firstIndex(where: { $0.id == l.page }),
+                  let vi = pages[pi].visuals.firstIndex(where: { $0.id == l.visual }) else { continue }
+            var c = pages[pi].visuals[vi].element
+            c.action = action
+            pages[pi].visuals[vi].content = c
+        }
+        if !bookmarks.isEmpty { notes.append(L("%@ signet(s) importé(s).", bookmarks.count)) }
+        if unsupportedFilters > 0 {
+            notes.append(L("%@ filtre(s) non repris (Top N, filtres sur des mesures, niveaux de date autres que l'année, ou valeurs absentes des données).", unsupportedFilters))
+        }
         currentPageID = pages[0].id
         dataTableName = tables.first?.name
         mode = .report
@@ -1351,6 +1501,7 @@ extension AppState {
         relationships = []
         measures = []
         bookmarks = []
+        reportFilters = []
         modelLayout = [:]
         theme = Theme.defaultName
         pages = []
@@ -1418,6 +1569,72 @@ extension AppState {
             let f = FieldRef(table: t, column: c)
             return ValueField(field: f, aggregation: defaultAggregation(for: f))
         }
+    }
+
+    /// Bookmarks of the report: page, filters, slicer selections, visibility (visuals and groups) and options.
+    /// Returns bookmark ids by their Power BI name (for button actions).
+    private func importBookmarks(_ project: PBIProject, pageByPBI: [String: UUID],
+                                 visualByPBI: [UUID: [String: UUID]]) -> [String: UUID] {
+        var out: [String: UUID] = [:]
+        var ignored = 0
+        bookmarks = project.bookmarks.compactMap { b in
+            guard let es = b["explorationState"] as? [String: Any], let first = pages.first else { return nil }
+            let pageID = (es["activeSection"] as? String).flatMap { pageByPBI[$0] } ?? first.id
+            var bm = Bookmark(name: b["displayName"] as? String ?? L("Signet"), pageID: pageID)
+            if let rf = es["filters"] {
+                bm.reportFilters = PBIFilters.bookmarkEntries(rf).compactMap { pageFilter($0, unsupported: &ignored) }
+            }
+            for (secName, secAny) in es["sections"] as? [String: Any] ?? [:] {
+                guard let pid = pageByPBI[secName], let sec = secAny as? [String: Any],
+                      let spec = project.pages.first(where: { $0.pbiName == secName }),
+                      let page = pages.first(where: { $0.id == pid }) else { continue }
+                if let f = sec["filters"] {
+                    bm.pageFilters[pid] = PBIFilters.bookmarkEntries(f).compactMap { pageFilter($0, unsupported: &ignored) }
+                }
+                let containers = sec["visualContainers"] as? [String: Any] ?? [:]
+                let groupStates = sec["visualContainerGroups"] as? [String: Any] ?? [:]
+                for vs in spec.visuals {
+                    guard let vid = visualByPBI[pid]?[vs.pbiName], let v = page.visuals.first(where: { $0.id == vid }) else { continue }
+                    let c = containers[vs.pbiName] as? [String: Any]
+                    let sv = c?["singleVisual"] as? [String: Any]
+                    var hidden: Bool? = sv.map { (($0["display"] as? [String: Any])?["mode"] as? String) == "hidden" }
+                    var g = vs.parentGroup, seen = Set<String>()
+                    while let n = g, seen.insert(n).inserted {
+                        if let h = (groupStates[n] as? [String: Any])?["isHidden"] as? Bool {
+                            if h { hidden = true; break } else if hidden == nil { hidden = false }
+                        }
+                        g = spec.groups[n]?.parent
+                    }
+                    var slicer: Set<String>?
+                    if let objs = sv?["objects"] as? [String: Any] {
+                        let o = (objs["merge"] as? [String: Any]) ?? objs
+                        if let cond = PBIFilters.slicerCondition(o) { slicer = slicerSelection(cond, field: v.axis.first) }
+                    }
+                    guard hidden != nil || slicer != nil else { continue }
+                    bm.visuals[vid] = Bookmark.VisualState(slicerSelection: slicer ?? v.slicerSelection, hidden: hidden == true ? true : nil)
+                }
+            }
+            let o = b["options"] as? [String: Any] ?? [:]
+            if o["suppressData"] as? Bool == true { bm.applyData = false }
+            if o["suppressDisplay"] as? Bool == true { bm.applyDisplay = false }
+            if o["suppressActiveSection"] as? Bool == true { bm.changePage = false }
+            if o["applyOnlyToTargetVisuals"] as? Bool == true, let names = o["targetVisualNames"] as? [String] {
+                // Targets can be groups: their visuals are affected.
+                var ids = Set<UUID>()
+                for spec in project.pages {
+                    guard let pid = pageByPBI[spec.pbiName] else { continue }
+                    for vs in spec.visuals {
+                        var g: String? = vs.pbiName, seen = Set<String>(), hit = false
+                        while let n = g, seen.insert(n).inserted { if names.contains(n) { hit = true; break }; g = n == vs.pbiName ? vs.parentGroup : spec.groups[n]?.parent }
+                        if hit, let id = visualByPBI[pid]?[vs.pbiName] { ids.insert(id) }
+                    }
+                }
+                bm.targets = ids
+            }
+            if let n = b["name"] as? String { out[n] = bm.id }
+            return bm
+        }
+        return out
     }
 
     private func makeVisual(_ s: PBIVisualSpec) -> Visual? {

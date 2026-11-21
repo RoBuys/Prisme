@@ -651,9 +651,28 @@ struct FiltersPane: View {
                     Text(L("Sélectionnez une catégorie dans un visuel d'une autre page, puis menu « … » › Extraire."))
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
                     Divider()
+                    if let v = state.selectedVisual {
+                        Text(L("Filtres sur ce visuel")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                        ForEach(v.filters ?? []) { f in FilterCard(filter: f) }
+                        FieldDropZone(placeholder: L("Ajouter des champs de données ici")) { state.addVisualFilter($0) }
+                        Divider()
+                    }
                     Text(L("Filtres sur cette page")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                     ForEach(state.currentPage.filters) { f in FilterCard(filter: f) }
                     FieldDropZone(placeholder: L("Ajouter des champs de données ici")) { state.addPageFilter($0) }
+                    Divider()
+                    Text(L("Filtres sur toutes les pages")).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    ForEach(state.reportFilters) { f in FilterCard(filter: f) }
+                    FieldDropZone(placeholder: L("Ajouter des champs de données ici")) { state.addReportFilter($0) }
+                    if state.hiddenVisualCount > 0 {
+                        Divider()
+                        HStack {
+                            Text(L("%@ visuel(s) masqué(s) sur cette page", state.hiddenVisualCount))
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                            Spacer()
+                            Button(L("Tout afficher")) { state.showAllVisuals() }.controlSize(.small)
+                        }
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
@@ -699,8 +718,8 @@ struct FilterCard: View {
                     } label: { Image(systemName: "calendar") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 }
-                if !filter.selected.isEmpty {
-                    Button { state.mutateFilter(filter.id) { $0.selected = [] } } label: {
+                if filter.isActive {
+                    Button { state.mutateFilter(filter.id) { $0.selected = []; $0.lower = nil; $0.upper = nil } } label: {
                         Image(systemName: "eraser")
                     }
                     .buttonStyle(.plain).help(L("Effacer le filtre"))
@@ -742,6 +761,16 @@ struct FilterCard: View {
     }
 
     private var summary: String {
+        if filter.lower != nil || filter.upper != nil {
+            let isDate = state.column(for: filter.field)?.type == .date
+            func text(_ x: Double) -> String { isDate ? Fmt.day(Date(timeIntervalSince1970: x)) : Fmt.number(x) }
+            switch (filter.lower, filter.upper) {
+            case (let lo?, let hi?): return L("entre %@ et %@", text(lo), text(hi))
+            case (let lo?, nil): return "≥ " + text(lo)
+            case (nil, let hi?): return "≤ " + text(hi)
+            default: break
+            }
+        }
         if filter.selected.isEmpty { return L("est (Tout)") }
         let s = filter.selected.sorted()
         return L("est ") + s.prefix(2).joined(separator: ", ") + (s.count > 2 ? " +\(s.count - 2)" : "")

@@ -37,7 +37,7 @@ struct PageRenderView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.white
-            ForEach(page.visuals) { v in
+            ForEach(page.visuals.filter { $0.hidden != true }) { v in
                 VisualContentView(visual: v)
                     .padding(v.type.isElement ? 0 : 10)
                     .frame(width: v.frame.width, height: v.frame.height)

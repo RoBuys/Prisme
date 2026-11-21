@@ -55,6 +55,8 @@ final class AppState {
     var stepErrors: [String: [UUID: String]] = [:]
     var modelLayout: [String: CGPoint] = [:]
     var bookmarks: [Bookmark] = []
+    /// Filters on every page of the report.
+    var reportFilters: [PageFilter] = []
     /// Report color theme (see `Theme.themes`).
     var theme = Theme.defaultName
     var pages: [ReportPage]
@@ -76,6 +78,7 @@ final class AppState {
         var modelLayout: [String: CGPoint]
         var theme: String
         var bookmarks: [Bookmark]
+        var reportFilters: [PageFilter]
         var currentPageID: UUID
     }
 
@@ -88,7 +91,8 @@ final class AppState {
 
     private func snapshot() -> Snapshot {
         Snapshot(tables: tables, pages: pages, relationships: relationships, measures: measures,
-                 modelLayout: modelLayout, theme: theme, bookmarks: bookmarks, currentPageID: currentPageID)
+                 modelLayout: modelLayout, theme: theme, bookmarks: bookmarks, reportFilters: reportFilters,
+                 currentPageID: currentPageID)
     }
 
     /// Records a change for undo and marks the document as modified.
@@ -132,6 +136,7 @@ final class AppState {
         modelLayout = s.modelLayout
         theme = s.theme
         bookmarks = s.bookmarks
+        reportFilters = s.reportFilters
         currentPageID = pages.contains { $0.id == s.currentPageID } ? s.currentPageID : pages[0].id
         if let id = selectedVisualID, visual(id) == nil { selectedVisualID = nil }
         crossFilter = nil
@@ -218,7 +223,7 @@ final class AppState {
 
     func filters(for v: Visual) -> [FilterSpec] {
         let page = currentPage
-        var specs = page.filters.filter { !$0.selected.isEmpty }.map { FilterSpec(field: $0.field, allowed: $0.selected) }
+        var specs = (reportFilters + page.filters + (v.filters ?? [])).compactMap(\.spec)
         for s in page.visuals where s.type == .slicer && s.id != v.id && !s.slicerSelection.isEmpty {
             if let f = s.axis.first { specs.append(FilterSpec(field: f, allowed: s.slicerSelection)) }
         }
@@ -644,9 +649,11 @@ final class AppState {
         for p in pages {
             b.pageFilters[p.id] = p.filters
             for v in p.visuals {
-                b.visuals[v.id] = Bookmark.VisualState(slicerSelection: v.slicerSelection, drillLevel: v.drillLevel, drillPath: v.drillPath)
+                b.visuals[v.id] = Bookmark.VisualState(slicerSelection: v.slicerSelection, drillLevel: v.drillLevel, drillPath: v.drillPath,
+                                                       hidden: v.hidden)
             }
         }
+        b.reportFilters = reportFilters
         return b
     }
 
@@ -658,17 +665,23 @@ final class AppState {
 
     func applyBookmark(_ id: UUID) {
         guard let b = bookmarks.first(where: { $0.id == id }) else { return }
+        let data = b.applyData ?? true, display = b.applyDisplay ?? true
+        if data, let rf = b.reportFilters { reportFilters = rf }
         for p in pages.indices {
-            if let f = b.pageFilters[pages[p].id] { pages[p].filters = f }
+            if data, b.targets == nil, let f = b.pageFilters[pages[p].id] { pages[p].filters = f }
             for i in pages[p].visuals.indices {
-                if let s = b.visuals[pages[p].visuals[i].id] {
+                let vid = pages[p].visuals[i].id
+                if let t = b.targets, !t.contains(vid) { continue }
+                guard let s = b.visuals[vid] else { continue }
+                if data {
                     pages[p].visuals[i].slicerSelection = s.slicerSelection
                     pages[p].visuals[i].drillLevel = s.drillLevel
                     pages[p].visuals[i].drillPath = s.drillPath
                 }
+                if display { pages[p].visuals[i].hidden = s.hidden }
             }
         }
-        if pages.contains(where: { $0.id == b.pageID }) { selectPage(b.pageID) }
+        if b.changePage ?? true, pages.contains(where: { $0.id == b.pageID }) { selectPage(b.pageID) }
         crossFilter = nil
         didChange()
     }
@@ -697,12 +710,48 @@ final class AppState {
     }
 
     func mutateFilter(_ id: UUID, _ body: (inout PageFilter) -> Void) {
-        mutatePage { p in
-            if let i = p.filters.firstIndex(where: { $0.id == id }) { body(&p.filters[i]) }
+        // Report, page or visual filter.
+        if let i = reportFilters.firstIndex(where: { $0.id == id }) { body(&reportFilters[i]); didChange(); return }
+        if pages[pageIndex].filters.contains(where: { $0.id == id }) {
+            mutatePage { p in if let i = p.filters.firstIndex(where: { $0.id == id }) { body(&p.filters[i]) } }
+            return
+        }
+        for v in pages[pageIndex].visuals where v.filters?.contains(where: { $0.id == id }) == true {
+            mutateVisual(v.id) { v in if let i = v.filters?.firstIndex(where: { $0.id == id }) { body(&v.filters![i]) } }
         }
     }
 
-    func removePageFilter(_ id: UUID) { mutatePage { $0.filters.removeAll { $0.id == id } } }
+    func removePageFilter(_ id: UUID) {
+        if reportFilters.contains(where: { $0.id == id }) { reportFilters.removeAll { $0.id == id }; didChange(); return }
+        if pages[pageIndex].filters.contains(where: { $0.id == id }) { mutatePage { $0.filters.removeAll { $0.id == id } }; return }
+        for v in pages[pageIndex].visuals where v.filters?.contains(where: { $0.id == id }) == true {
+            mutateVisual(v.id) { $0.filters?.removeAll { $0.id == id } }
+        }
+    }
+
+    func addReportFilter(_ field: FieldRef) {
+        guard let col = column(for: field) else { return }
+        var f = field
+        f.dateLevel = col.type == .date ? .year : nil
+        if !reportFilters.contains(where: { $0.field == f }) { reportFilters.append(PageFilter(field: f)); didChange() }
+    }
+
+    func addVisualFilter(_ field: FieldRef) {
+        guard let id = selectedVisualID, let col = column(for: field) else { return }
+        var f = field
+        f.dateLevel = col.type == .date ? .year : nil
+        mutateVisual(id) { v in
+            if !(v.filters ?? []).contains(where: { $0.field == f }) { v.filters = (v.filters ?? []) + [PageFilter(field: f)] }
+        }
+    }
+
+    // MARK: Hidden visuals
+
+    var hiddenVisualCount: Int { currentPage.visuals.filter { $0.hidden == true }.count }
+
+    func setHidden(_ id: UUID, _ hidden: Bool) { mutateVisual(id) { $0.hidden = hidden ? true : nil } }
+
+    func showAllVisuals() { mutatePage { p in for i in p.visuals.indices { p.visuals[i].hidden = nil } } }
 
     // MARK: Pages
 
@@ -1432,6 +1481,7 @@ final class AppState {
         relationships = []
         measures = []
         bookmarks = []
+        reportFilters = []
         theme = Theme.defaultName
         modelLayout = [:]
         pages = [p]
@@ -1463,6 +1513,7 @@ final class AppState {
             modelLayout = doc.modelLayout
             theme = doc.theme ?? Theme.defaultName
             bookmarks = doc.bookmarks
+            reportFilters = doc.reportFilters
             pages = doc.pages.isEmpty ? [ReportPage(name: L("Page 1"))] : doc.pages
             currentPageID = pages[0].id
             selectedVisualID = nil
@@ -1494,7 +1545,7 @@ final class AppState {
 
     private func write(to url: URL) -> Bool {
         do {
-            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout, theme: theme, bookmarks: bookmarks))
+            let data = try JSONEncoder().encode(ReportDocument(tables: tables, pages: pages, relationships: relationships, measures: measures, modelLayout: modelLayout, theme: theme, bookmarks: bookmarks, reportFilters: reportFilters))
             try data.write(to: url, options: .atomic)
             fileURL = url
             isDirty = false
