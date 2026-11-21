@@ -1,0 +1,39 @@
+# Keeps a running total of git clones (GitHub only keeps 14 days of traffic) and publishes it as a badge.
+# Needs a TRAFFIC_TOKEN secret: a token with read access to the repository's traffic (fine-grained token with
+# "Administration: read", or a classic token with the "repo" scope).
+name: Clone counter
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: traffic
+      - name: Merge the last 14 days into the history
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/traffic/clones > latest.json
+          [ -f clones.json ] || echo '{}' > clones.json
+          # One entry per day; the latest figures for a day replace the older ones.
+          jq -s '.[0] + ([.[1].clones[] | {(.timestamp[0:10]): {count, uniques}}] | add // {})' clones.json latest.json > merged.json
+          mv merged.json clones.json
+          total=$(jq '[.[].count] | add // 0' clones.json)
+          jq -n --arg m "$total" '{schemaVersion: 1, label: "clones", message: $m, color: "blue"}' > clones-badge.json
+          rm latest.json
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add clones.json clones-badge.json
+          git diff --cached --quiet || git commit -m "Update clone count"
+          git push
