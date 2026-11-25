@@ -54,7 +54,7 @@ extension PrismeTests {
             let root = Fixture.temp("update")
             let build = root.appendingPathComponent("build"), installed = root.appendingPathComponent("Applications"), dl = root.appendingPathComponent("dl")
             for d in [build, installed, dl] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
-            let newApp = try Self.fakeApp(in: build, version: "1.1", marker: "new")
+            let newApp = try Self.fakeApp(in: build, version: "1.1.0", marker: "new")   // tag v1.1, app 1.1.0
             let zip = dl.appendingPathComponent("Prisme-1.1-macOS.zip")
             try Self.zip(newApp, to: zip)
             let release = Updater.Release(version: "1.1", tag: "v1.1", notes: "", assetURL: URL(string: "https://x/Prisme-1.1-macOS.zip")!,

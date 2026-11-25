@@ -137,37 +137,36 @@ final class Updater {
             let zip = try await download(r)
             phase = .installing
             let newApp = try Self.unpackAndVerify(zip: zip, release: r)
+            // Unsaved changes are handled before anything is replaced.
+            guard AppState.shared.confirmDiscard() else {
+                phase = .available(r)
+                return
+            }
             try Self.replaceAndRelaunch(current: Bundle.main.bundleURL, with: newApp)
+            // An open sheet keeps the app from quitting: close it, quit, and make sure it does.
+            showSheet = false
+            AppState.shared.isDirty = false
+            try? await Task.sleep(for: .milliseconds(300))
             NSApp.terminate(nil)
+            try? await Task.sleep(for: .seconds(3))
+            exit(0)
         } catch {
             phase = .failed(error.localizedDescription)
         }
     }
 
     private func download(_ r: Release) async throws -> URL {
-        let (bytes, response) = try await URLSession.shared.bytes(from: r.assetURL)
+        // Downloaded to a file by the URL session; progress comes from a delegate.
+        let progress = DownloadProgress { [weak self] f in Task { @MainActor in self?.phase = .downloading(f) } }
+        let (file, response) = try await URLSession.shared.download(from: r.assetURL, delegate: progress)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw ImportError(message: L("Le téléchargement de la mise à jour a échoué."))
         }
-        let total = max(Int(response.expectedContentLength), r.assetSize, 1)
-        var data = Data()
-        data.reserveCapacity(total)
-        var buffer: [UInt8] = []
-        buffer.reserveCapacity(65_536)
-        for try await b in bytes {
-            buffer.append(b)
-            if buffer.count == 65_536 {
-                data.append(contentsOf: buffer)
-                buffer.removeAll(keepingCapacity: true)
-                phase = .downloading(min(1, Double(data.count) / Double(total)))
-            }
-        }
-        data.append(contentsOf: buffer)
-        try Self.verifyDigest(data, r.digest)
+        try Self.verifyDigest(try Data(contentsOf: file), r.digest)
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("prisme-update-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let zip = dir.appendingPathComponent(r.assetURL.lastPathComponent)
-        try data.write(to: zip)
+        try FileManager.default.moveItem(at: file, to: zip)
         return zip
     }
 
@@ -196,7 +195,7 @@ final class Updater {
         }
         guard info["CFBundleIdentifier"] as? String == bundleIdentifier,
               let version = info["CFBundleShortVersionString"] as? String,
-              components(version) == components(r.version) else {
+              !isNewer(version, than: r.version), !isNewer(r.version, than: version) else {   // 1.1 = 1.1.0
             throw ImportError(message: L("L'archive ne contient pas la version attendue de Prisme."))
         }
         return app
@@ -230,6 +229,17 @@ final class Updater {
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
         p.arguments = [script.path]
         try p.run()
+    }
+}
+
+/// Reports download progress (0…1).
+final class DownloadProgress: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    let report: (Double) -> Void
+    private var observation: NSKeyValueObservation?
+    init(_ report: @escaping (Double) -> Void) { self.report = report }
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        observation = task.progress.observe(\.fractionCompleted) { [report] p, _ in report(p.fractionCompleted) }
     }
 }
 
