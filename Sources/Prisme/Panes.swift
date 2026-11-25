@@ -11,6 +11,33 @@ struct PaneHeader: View {
     }
 }
 
+/// A field well of the Visualizations pane; the whole section is a drop target.
+struct WellSection<Content: View>: View {
+    let title: String
+    let onDrop: ((FieldRef) -> Void)?
+    let content: Content
+    @State private var targeted = false
+
+    var body: some View {
+        let stack = VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            content
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(targeted ? Theme.accent.opacity(0.08) : .clear))
+        .contentShape(Rectangle())
+        if let onDrop {
+            stack.dropDestination(for: String.self) { items, _ in
+                let fields = items.compactMap(FieldRef.init(payload:))
+                fields.forEach(onDrop)
+                return !fields.isEmpty
+            } isTargeted: { targeted = $0 }
+        } else {
+            stack
+        }
+    }
+}
+
 /// Dashed drop zone that accepts fields dragged from the Data pane.
 struct FieldDropZone: View {
     let placeholder: String
@@ -139,7 +166,7 @@ struct VisualizationsPane: View {
 
     /// A single-value well bound to position `index` of the value list.
     private func slotWell(_ title: String, _ v: Visual, _ index: Int) -> some View {
-        wellSection(title) {
+        wellSection(title, onDrop: { state.addField($0, to: .slot(min(index, v.values.count)), visualID: v.id) }) {
             if index < v.values.count {
                 let vf = v.values[index]
                 FieldChip(name: vf.displayName, warning: warning(vf.field, v), isMeasure: vf.measure) {
@@ -173,16 +200,15 @@ struct VisualizationsPane: View {
         }
     }
 
-    private func wellSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            content()
-        }
+    /// A well: its title and fields; the whole section accepts dropped fields (not only its dashed zone).
+    private func wellSection<Content: View>(_ title: String, onDrop: ((FieldRef) -> Void)? = nil,
+                                            @ViewBuilder content: () -> Content) -> some View {
+        WellSection(title: title, onDrop: onDrop, content: content())
     }
 
     private func axisWell(_ title: String, _ v: Visual, multi: Bool) -> some View {
         let items = multi ? v.axis : Array(v.axis.prefix(1))
-        return wellSection(title) {
+        return wellSection(title, onDrop: { state.addField($0, to: .axis, visualID: v.id) }) {
             ForEach(Array(items.enumerated()), id: \.offset) { i, f in
                 FieldChip(name: (multi && v.supportsHierarchy && items.count > 1 && i == v.level ? "▸ " : "") + f.displayName,
                           warning: warning(f, v)) {
@@ -205,7 +231,7 @@ struct VisualizationsPane: View {
     }
 
     private func legendWell(_ v: Visual, title: String? = nil) -> some View {
-        wellSection(title ?? L("Légende")) {
+        wellSection(title ?? L("Légende"), onDrop: { state.addField($0, to: .legend, visualID: v.id) }) {
             if let l = v.legend {
                 FieldChip(name: l.displayName, warning: warning(l, v)) {
                     dateLevelMenu(l) { level in state.mutateVisual(v.id) { $0.legend?.dateLevel = level } }
@@ -221,7 +247,7 @@ struct VisualizationsPane: View {
 
     private func valuesWell(_ title: String, _ v: Visual, multi: Bool) -> some View {
         let items = multi ? v.values : Array(v.values.prefix(1))
-        return wellSection(title) {
+        return wellSection(title, onDrop: { state.addField($0, to: .values, visualID: v.id) }) {
             ForEach(items) { vf in
                 FieldChip(name: vf.displayName, warning: warning(vf.field, v), isMeasure: vf.measure) {
                     let isNumber = state.column(for: vf.field)?.type == .number
@@ -556,18 +582,43 @@ struct FieldsPane: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
-        .onTapGesture { if state.mode == .report { state.quickAdd(m.field) } }
-        .onTapGesture(count: 2) { state.editMeasure(m) }
         .draggable(m.field.payload) {
             Label(m.name, systemImage: "function")
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent.opacity(0.2)))
         }
+        // Simultaneous taps: on macOS a plain tap gesture keeps the drag from starting.
+        .simultaneousGesture(TapGesture(count: 2).onEnded { state.editMeasure(m) }
+            .exclusively(before: TapGesture().onEnded { if state.mode == .report { state.quickAdd(m.field) } }))
         .contextMenu {
+            addToMenu(m.field, isMeasure: true)
             Button(L("Modifier la mesure…")) { state.editMeasure(m) }
             Button(L("Supprimer la mesure"), role: .destructive) { state.deleteMeasure(m) }
         }
         .help(L("Mesure : %@", m.expression))
+    }
+
+    /// "Add to" menu: puts the field in a chosen well of the selected visual.
+    @ViewBuilder
+    private func addToMenu(_ field: FieldRef, isMeasure: Bool) -> some View {
+        if state.mode == .report, let v = state.selectedVisual, !v.type.isElement {
+            Menu(L("Ajouter à")) {
+                if !isMeasure && v.type != .card && !v.type.usesValueSlots {
+                    Button(v.type == .table ? L("Regrouper par") : v.type == .matrix ? L("Lignes") : L("Axe")) {
+                        state.addField(field, to: .axis, visualID: v.id)
+                    }
+                }
+                if !isMeasure && (v.type.isCartesian || v.type == .matrix) {
+                    Button(v.type == .matrix ? L("Colonnes") : L("Légende")) { state.addField(field, to: .legend, visualID: v.id) }
+                }
+                if v.type != .slicer {
+                    Button(L("Valeurs")) {
+                        state.addField(field, to: v.type.usesValueSlots ? .slot(v.values.count) : .values, visualID: v.id)
+                    }
+                }
+            }
+            Divider()
+        }
     }
 
     private func fieldRow(_ t: DataTable, _ c: DataColumn) -> some View {
@@ -587,15 +638,17 @@ struct FieldsPane: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            if state.mode == .report { state.quickAdd(field) } else { state.dataTableName = t.name }
-        }
         .draggable(field.payload) {
             Label(c.name, systemImage: c.type.symbol)
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent.opacity(0.2)))
         }
+        // Simultaneous tap: on macOS a plain tap gesture keeps the drag from starting.
+        .simultaneousGesture(TapGesture().onEnded {
+            if state.mode == .report { state.quickAdd(field) } else { state.dataTableName = t.name }
+        })
         .contextMenu {
+            addToMenu(field, isMeasure: false)
             if c.expression != nil {
                 Button(L("Modifier la colonne calculée…")) { state.editColumn(table: t.name, column: c) }
                 Button(L("Supprimer la colonne"), role: .destructive) { state.deleteColumn(table: t.name, column: c.name) }
