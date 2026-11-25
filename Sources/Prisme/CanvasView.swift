@@ -23,6 +23,12 @@ struct ReportCanvas: View {
                     }
                 }
                 .frame(width: PageSize.width, height: PageSize.height, alignment: .topLeading)
+                // Fields dragged from the Data pane: onto a visual, or onto the page for a new visual.
+                .dropDestination(for: String.self) { items, location in
+                    let fields = items.compactMap(FieldRef.init(payload:))
+                    for f in fields { state.dropField(f, at: location) }
+                    return !fields.isEmpty
+                }
                 .scaleEffect(s, anchor: .topLeading)
                 .frame(width: pw, height: ph, alignment: .topLeading)
                 .clipped()
@@ -72,7 +78,7 @@ struct EmptyPageView: View {
                 .controlSize(.large)
             } else {
                 Text(L("Créez votre premier visuel")).font(.title2.weight(.semibold))
-                Text(L("Choisissez un type dans le volet Visualisations, ou cliquez sur un champ du volet Données."))
+                Text(L("Glissez un champ du volet Données sur la page, ou choisissez un type dans le volet Visualisations."))
                     .foregroundStyle(.secondary)
             }
         }

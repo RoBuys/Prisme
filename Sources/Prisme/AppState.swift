@@ -540,6 +540,35 @@ final class AppState {
         column(for: f)?.type == .number ? .sum : .count
     }
 
+    /// A field dropped on the page (logical coordinates): onto the visual under the point, in the well that fits
+    /// (numbers and measures → values; text and dates → axis, then legend), or as a new visual there
+    /// (a table for text and dates, a card for numbers and measures).
+    func dropField(_ field: FieldRef, at point: CGPoint) {
+        let isMeasure = measure(for: field) != nil
+        guard let col = column(for: field) ?? (isMeasure ? DataColumn(name: field.column, type: .number) : nil) else { return }
+        let numeric = isMeasure || col.type == .number
+        if let v = currentPage.visuals.reversed().first(where: { $0.hidden != true && !$0.type.isElement && $0.frame.contains(point) }) {
+            let well: Well
+            switch v.type {
+            case .card, .gauge, .kpi: well = .values
+            case .slicer: well = .axis
+            case .table, .matrix: well = numeric ? .values : .axis
+            default: well = numeric ? .values : (v.axis.isEmpty || !v.type.isCartesian || v.legend != nil ? .axis : .legend)
+            }
+            selectedVisualID = v.id
+            addField(field, to: well, visualID: v.id)
+            return
+        }
+        let type: VisualType = numeric ? .card : .table
+        let id = addVisual(type)
+        let size = type.defaultSize
+        mutateVisual(id) { v in
+            v.frame.origin = CGPoint(x: min(max(0, point.x - size.width / 2), PageSize.width - size.width),
+                                     y: min(max(0, point.y - size.height / 2), PageSize.height - size.height))
+        }
+        addField(field, to: numeric ? .values : .axis, visualID: id)
+    }
+
     func addField(_ field: FieldRef, to well: Well, visualID: UUID) {
         guard let v = visual(visualID) else { return }
         let isMeasure = measure(for: field) != nil

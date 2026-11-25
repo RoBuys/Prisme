@@ -738,6 +738,7 @@ enum Strings {
         "Modifier la table calculée…": "Edit Calculated Table…",
         "Résultat : ": "Result: ",
         "Nouvelle table": "New table",
+        "Glissez un champ du volet Données sur la page, ou choisissez un type dans le volet Visualisations.": "Drag a field from the Data pane onto the page, or pick a type in the Visualizations pane.",
         "Thème du rapport importé": "Imported report theme",
         "%@ rôle(s) de sécurité importé(s) : Affichage › Afficher en tant que.": "%@ security role(s) imported: View › Roles.",
         "Gérer les rôles": "Manage roles",
