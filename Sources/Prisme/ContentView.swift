@@ -120,6 +120,9 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { state.showGetData }, set: { state.showGetData = $0 })) {
             GetDataView().environment(state)
         }
+        .sheet(isPresented: Binding(get: { Updater.shared.showSheet }, set: { Updater.shared.showSheet = $0 })) {
+            UpdateSheet()
+        }
         .sheet(isPresented: Binding(get: { state.showRoles }, set: { state.showRoles = $0 })) {
             RolesSheet().environment(state)
         }
@@ -475,6 +478,7 @@ struct CollapsedPaneStrip: View {
 /// Settings window (⌘,).
 struct SettingsView: View {
     @Environment(AppState.self) private var state
+    @State private var autoUpdate = Updater.shared.automatic
 
     var body: some View {
         @Bindable var state = state
@@ -483,6 +487,11 @@ struct SettingsView: View {
                 ForEach(AppLanguage.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.radioGroup)
+            Divider()
+            Toggle(L("Rechercher automatiquement les mises à jour"), isOn: $autoUpdate)
+                .onChange(of: autoUpdate) { _, v in Updater.shared.automatic = v }
+            Button(L("Rechercher maintenant")) { Task { await Updater.shared.check(userInitiated: true) } }
+            Text(L("Version %@", Updater.currentVersion)).font(.system(size: 11)).foregroundStyle(.secondary)
         }
         .padding(20)
         .frame(width: 380)

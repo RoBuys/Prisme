@@ -55,6 +55,9 @@ struct PrismeApp: App {
             SettingsView().environment(state)
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button(L("Rechercher les mises à jour…")) { Task { await Updater.shared.check(userInitiated: true) } }
+            }
             CommandGroup(replacing: .newItem) {
                 let _ = state.language   // rebuild menus when the language changes
                 Button(L("Nouveau rapport")) { state.newDocument() }.keyboardShortcut("n")
@@ -121,6 +124,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        if !CommandLine.arguments.contains(where: { $0.hasPrefix("--") }) { Updater.shared.checkAtLaunch() }
+        // `--install-update`: checks and installs the latest release without asking (testing aid).
+        if CommandLine.arguments.contains("--install-update") {
+            Task { @MainActor in
+                await Updater.shared.check(userInitiated: true)
+                if case .available(let r) = Updater.shared.phase { await Updater.shared.install(r) }
+            }
+        }
         // `--snapshot <file.png>`: renders the main window to an image after launch (debugging aid).
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count {

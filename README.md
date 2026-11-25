@@ -105,6 +105,15 @@ import data, then build interactive reports with drag and drop. The interface is
   official Power BI JavaScript client). You can also paste a link copied from app.powerbi.com; "Publish to web"
   links open without signing in. See [Connecting to Power BI](#connecting-to-power-bi).
 
+## Updates
+
+Prisme checks GitHub for a new release at launch (at most once a day; **Prisme › Settings…** turns it off) and from
+**Prisme › Check for Updates…**. The update is downloaded over HTTPS, checked against the SHA-256 digest GitHub
+publishes for the release file and against its bundle identifier and version, then Prisme is replaced (the previous
+version goes to the Trash) and relaunched. Only the request to the public GitHub API is made; nothing about you or
+your reports is sent. Keep Prisme in a folder you can write to, such as Applications. Versions before 1.1 have no
+updater: download 1.1 once from the Releases page.
+
 ## Building
 
 ```bash
